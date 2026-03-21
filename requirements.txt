@@ -1,0 +1,15 @@
+# Install into a local virtualenv (see scripts/bootstrap_venv.sh):
+#   python3 -m venv .venv && source .venv/bin/activate && pip install -U pip && pip install -r requirements.txt && pip install -e .
+#
+# PyTorch: use the official index matching your CUDA/CPU setup if needed:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#
+# SAM modeling code lives under models/sam/ (official architecture; weights are separate).
+
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+Pillow>=10.0.0
+matplotlib>=3.7.0
+tqdm>=4.65.0
+PyYAML>=6.0.0
