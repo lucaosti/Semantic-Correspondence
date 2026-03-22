@@ -18,6 +18,29 @@ From there you can work in two styles. **Ad hoc**: call `scripts/eval_baseline.p
 
 Project rules—splits (`train` / `val` / `test`), no Hugging Face checkpoints for these backbones, window soft-argmax only at inference—are spelled out in **`docs/info.md`**. Italian working notes and layout expectations are in **`docs/claude.md`**. A literature-oriented overview lives in **`docs/stato-arte.md`**. Those files are the canonical place for constraints; the root README stays a practical tour of the repo.
 
+### External notebook workflow
+
+If you want a notebook outside this repository to control training, evaluation, and plots, use the notebook helpers in **`utils/notebook_workflow.py`** and keep the tunables in a single YAML file. A complete template lives at **`notebooks/notebook_config.example.yaml`**.
+
+Recommended setup:
+
+1. Install the project and notebook extras: `pip install -e ".[notebook]"`.
+2. Copy `notebooks/notebook_config.example.yaml` next to your external notebook and edit the paths, training jobs, and experiment list there.
+3. In the notebook, load the config with `from utils.notebook_workflow import load_workflow_config`.
+4. Run training with `run_finetune_job(cfg)` and `run_lora_job(cfg)`; both functions call the existing CLI scripts and write logs under `runs/notebook_exports/logs/`.
+5. Run evaluation with `run_evaluation_suite(cfg)`, then export and plot with `save_results(...)` and `plot_results(...)`.
+6. Use `show_dataset_sample(cfg, split="val", index=0)` for a quick visual check of preprocessing and data loading.
+
+The YAML is split into:
+
+- `paths`: repo root, SPair-71k root, checkpoint directory, output directory.
+- `runtime`: device, worker count, preprocessing mode, image size, PCK thresholds, WSA settings.
+- `finetune`: last blocks, epochs, patience, learning rate, weight decay, resume path, backbone weights.
+- `lora`: LoRA rank/alpha plus the same backbone and runtime controls.
+- `experiments`: the evaluation runs you want to compare, including baseline, WSA, fine-tuned checkpoints, and LoRA checkpoints.
+
+That keeps the notebook thin: the repository code handles path resolution, command construction, result export, and plotting.
+
 ---
 
 ### Commands (quick reference)

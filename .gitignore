@@ -70,7 +70,7 @@ runs/
 checkpoints/
 
 # Local papers in docs/ only (do not commit pdf and md files)
-docs/*
+docs/
 
 # Local / secrets (do not commit)
 .env
