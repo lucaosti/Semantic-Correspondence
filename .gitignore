@@ -69,8 +69,8 @@ datasets/
 runs/
 checkpoints/
 
-# Local papers in docs/ only (do not commit pdf and md files)
-docs/
+# Local papers under docs/ (PDFs stay private; Markdown guidelines are tracked)
+docs/**/*.pdf
 
 # Local / secrets (do not commit)
 .env

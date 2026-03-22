@@ -3,6 +3,9 @@
 #
 # PyTorch: use the official index matching your CUDA/CPU setup if needed:
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+# Older NVIDIA GPUs (Pascal, e.g. GTX 1080 Ti): after install, confirm CUDA works
+# (e.g. python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None)").
+# Capability (6, 1) is Pascal; if CUDA is False, reinstall torch with a build that still supports your GPU from pytorch.org.
 #
 # SAM modeling code lives under models/sam/ (official architecture; weights are separate).
 

@@ -26,9 +26,9 @@ class FinetuneConfig:
     max_epochs:
         Upper bound on epochs (use early stopping in practice).
     batch_size:
-        Mini-batch size for paired samples.
+        Must be ``1`` for the Gaussian correspondence loss used by the training scripts.
     num_workers:
-        DataLoader workers.
+        DataLoader workers (CLI scripts use ``-1`` for host-aware defaults in ``utils.hardware``).
     """
 
     backbone: str = "dinov2_vitb14"
@@ -36,7 +36,7 @@ class FinetuneConfig:
     learning_rate: float = 5e-5
     weight_decay: float = 0.01
     max_epochs: int = 50
-    batch_size: int = 4
+    batch_size: int = 1
     num_workers: int = 4
 
 
@@ -55,6 +55,10 @@ class LoRAConfig:
         Which modules to adapt (implementation-specific string), e.g. ``mlp`` or ``attn+mlp``.
     max_epochs:
         Short schedules (often ~2 epochs on SPair-71k) are common for PEFT.
+    batch_size:
+        Must be ``1`` for the Gaussian correspondence loss used by the training scripts.
+    num_workers:
+        DataLoader workers (CLI scripts use ``-1`` for host-aware defaults in ``utils.hardware``).
     """
 
     rank: int = 8
@@ -62,7 +66,7 @@ class LoRAConfig:
     target: str = "mlp"
     max_epochs: int = 2
     learning_rate: float = 1e-3
-    batch_size: int = 4
+    batch_size: int = 1
     num_workers: int = 4
 
 
