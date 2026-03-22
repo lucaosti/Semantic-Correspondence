@@ -8,6 +8,10 @@ the repository root with the venv active and ``pip install -e .``:
 .. code-block:: bash
 
    python scripts/run_pipeline.py
+   python scripts/run_pipeline.py --config config.yaml
+
+The optional ``--config`` flag loads a YAML file (same structure as the Colab ``AML.ipynb`` notebook)
+and overrides the in-script defaults without editing this file.
 
 Order of execution: dataset verification (optional) → fine-tune (per backbone flag) → LoRA (per
 flag) → PCK evaluation and optional exports → optional pytest → optional notebook hint.
@@ -141,6 +145,113 @@ WSA_TEMPERATURE: float = 1.0
 BACKBONE_NAMES: Tuple[str, str, str] = ("dinov2_vitb14", "dinov3_vitb16", "sam_vit_b")
 
 
+def _triplet_bool(name: str, value: Any) -> Tuple[bool, bool, bool]:
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError(f"{name} must be a length-3 list/tuple of booleans (DINOv2, DINOv3, SAM), got {value!r}")
+    return (bool(value[0]), bool(value[1]), bool(value[2]))
+
+
+def _apply_pipeline_yaml(path: Path) -> None:
+    """Load a Colab/notebook-style YAML file and override module-level pipeline settings."""
+    try:
+        import yaml
+    except ImportError as exc:  # pragma: no cover - PyYAML is a declared dependency
+        raise ImportError("PyYAML is required for --config (pip install pyyaml).") from exc
+
+    path = path.expanduser().resolve()
+    with open(path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    if not isinstance(raw, dict):
+        raise TypeError(f"Expected a YAML mapping in {path}, got {type(raw).__name__}")
+
+    g = globals()
+
+    paths = raw.get("paths") or {}
+    if isinstance(paths, dict):
+        if paths.get("spair_root") is not None:
+            g["SPAIR_ROOT"] = str(paths["spair_root"])
+        if paths.get("checkpoint_dir") is not None:
+            g["CHECKPOINT_DIR"] = str(paths["checkpoint_dir"])
+
+    runtime = raw.get("runtime") or {}
+    if isinstance(runtime, dict):
+        if "device" in runtime:
+            g["DEVICE"] = runtime["device"]
+        nw = runtime.get("num_workers")
+        if nw is not None:
+            g["NUM_WORKERS"] = None if nw in (-1, None) else int(nw)
+        if runtime.get("preprocess") is not None:
+            g["PREPROCESS"] = str(runtime["preprocess"])
+        if runtime.get("image_height") is not None:
+            g["IMAGE_HEIGHT"] = int(runtime["image_height"])
+        if runtime.get("image_width") is not None:
+            g["IMAGE_WIDTH"] = int(runtime["image_width"])
+        if runtime.get("limit_pairs") is not None:
+            g["EVAL_LIMIT"] = int(runtime["limit_pairs"])
+        if runtime.get("alphas") is not None:
+            alphas = tuple(float(a) for a in runtime["alphas"])
+            g["EVAL_ALPHAS"] = alphas
+        if runtime.get("wsa_window") is not None:
+            g["WSA_WINDOW"] = int(runtime["wsa_window"])
+        if runtime.get("wsa_temperature") is not None:
+            g["WSA_TEMPERATURE"] = float(runtime["wsa_temperature"])
+        if runtime.get("log_batch_interval") is not None:
+            g["LOG_BATCH_INTERVAL"] = int(runtime["log_batch_interval"])
+        if runtime.get("eval_split") is not None:
+            g["EVAL_SPLIT"] = str(runtime["eval_split"])
+
+    finetune = raw.get("finetune") or {}
+    if isinstance(finetune, dict):
+        if finetune.get("last_blocks") is not None:
+            g["LAST_BLOCKS"] = int(finetune["last_blocks"])
+        if finetune.get("epochs") is not None:
+            g["FT_EPOCHS"] = int(finetune["epochs"])
+        if finetune.get("patience") is not None:
+            g["FT_PATIENCE"] = int(finetune["patience"])
+        if finetune.get("dinov2_weights") is not None:
+            g["DINOV2_WEIGHTS"] = finetune["dinov2_weights"]
+        if finetune.get("dinov3_weights") is not None:
+            g["DINOV3_WEIGHTS"] = finetune["dinov3_weights"]
+        if finetune.get("sam_checkpoint") is not None:
+            g["SAM_CHECKPOINT"] = str(finetune["sam_checkpoint"])
+
+    lora = raw.get("lora") or {}
+    if isinstance(lora, dict):
+        if lora.get("epochs") is not None:
+            g["LORA_EPOCHS"] = int(lora["epochs"])
+        if lora.get("patience") is not None:
+            g["LORA_PATIENCE"] = int(lora["patience"])
+        if lora.get("rank") is not None:
+            g["LORA_RANK"] = int(lora["rank"])
+
+    toggles = raw.get("workflow_toggles") or {}
+    if isinstance(toggles, dict):
+        if "pipeline_resume" in toggles:
+            g["PIPELINE_RESUME"] = bool(toggles["pipeline_resume"])
+        if "run_verify_dataset" in toggles:
+            g["RUN_VERIFY_DATASET"] = bool(toggles["run_verify_dataset"])
+        for key, dest in (
+            ("train_finetune", "TRAIN_FINETUNE"),
+            ("train_lora", "TRAIN_LORA"),
+            ("run_eval_baseline", "RUN_EVAL_BASELINE"),
+            ("run_eval_baseline_wsa", "RUN_EVAL_BASELINE_WSA"),
+            ("run_eval_finetuned_checkpoint", "RUN_EVAL_FINETUNED_CHECKPOINT"),
+            ("run_eval_lora_checkpoint", "RUN_EVAL_LORA_CHECKPOINT"),
+        ):
+            if key in toggles and toggles[key] is not None:
+                g[dest] = _triplet_bool(dest, toggles[key])
+        if "run_export_metrics_tables" in toggles:
+            g["RUN_EXPORT_METRICS_TABLES"] = bool(toggles["run_export_metrics_tables"])
+        if "run_pytest" in toggles:
+            g["RUN_PYTEST"] = bool(toggles["run_pytest"])
+        if "print_jupyter_notebook_hint" in toggles:
+            g["PRINT_JUPYTER_NOTEBOOK_HINT"] = bool(toggles["print_jupyter_notebook_hint"])
+
+    # Optional top-level eval split (some notebook YAMLs use experiments; we only need split)
+    if raw.get("eval_split") is not None:
+        g["EVAL_SPLIT"] = str(raw["eval_split"])
+
+
 def _fingerprint_payload() -> Dict[str, Any]:
     """Serializable config for :func:`utils.pipeline_state.fingerprint_from_config`."""
     return {
@@ -164,6 +275,7 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "EVAL_ALPHAS": list(EVAL_ALPHAS),
         "WSA_WINDOW": WSA_WINDOW,
         "WSA_TEMPERATURE": WSA_TEMPERATURE,
+        "PIPELINE_RESUME": PIPELINE_RESUME,
         "RUN_VERIFY_DATASET": RUN_VERIFY_DATASET,
         "TRAIN_FINETUNE": list(TRAIN_FINETUNE),
         "TRAIN_LORA": list(TRAIN_LORA),
@@ -740,8 +852,25 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
 
 
 def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run semantic-correspondence pipeline.")
+    parser.add_argument(
+        "--config",
+        metavar="PATH",
+        default=None,
+        help="Optional YAML file (Colab / notebook style) overriding in-script defaults.",
+    )
+    args = parser.parse_args()
+
     cwd = _repo_root()
     os.chdir(cwd)
+    if args.config:
+        cfg_path = Path(args.config).expanduser()
+        if not cfg_path.is_absolute():
+            cfg_path = (cwd / cfg_path).resolve()
+        _apply_pipeline_yaml(cfg_path)
+
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     log_path = cwd / "runs" / "logs" / f"pipeline_{stamp}.log"
     logger = PipelineLogger(log_path, mirror_to_terminal=not _pipeline_log_file_only())
