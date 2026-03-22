@@ -6,13 +6,13 @@ If you are setting up from scratch, start from the repository root. The bootstra
 
 **Image size:** training and evaluation scripts default to **784×784** `FIXED_RESIZE` so spatial sizes are divisible by both patch **14** (DINOv2 ViT-B/14) and **16** (DINOv3 ViT-B/16). SAM still applies its own 1024×1024 path inside the dense extractor when selected.
 
-**Training length & progress:** fine-tune defaults to **50** epochs with early stopping (`FT_PATIENCE`); LoRA defaults to **2** epochs (`LORA_EPOCHS` in `scripts/run_pipeline.py`). Those scripts print a startup line (device, batches per epoch), then `epoch k/total`, periodic batch indices (`--log-batch-interval`), and loss per epoch. Follow `tail -f runs/logs/pipeline_*.log` for the latest run.
+**Training length & progress:** the orchestrated driver (`scripts/run_pipeline.py`) defaults to **200** epochs each for fine-tuning and LoRA (all backbones), with early stopping via `FT_PATIENCE` / `LORA_PATIENCE` — edit those constants to change schedule. CLI examples below may use shorter runs. Logs: `epoch k/total`, batch indices when `--log-batch-interval` > 0, and `tail -f runs/logs/current.log`.
 
-**Hardware:** the loss uses **batch size 1**, so GPUs are rarely fully saturated. Training/eval pick **CUDA → Apple MPS → CPU** automatically when `--device` is omitted (or set `DEVICE = None` in `run_pipeline.py`). DataLoader workers default to **auto** (`--num-workers -1` or `NUM_WORKERS = None`): Linux uses up to 32 workers from `os.cpu_count()`, macOS caps lower (spawn overhead). Pinned memory and `persistent_workers` apply on CUDA only.
+**Hardware:** the loss uses **batch size 1**, so GPUs are rarely fully saturated. Training/eval pick **CUDA → Apple MPS → CPU** automatically when `--device` is omitted (or set `DEVICE = None` in `run_pipeline.py`). DataLoader workers default to **auto**: **CUDA** prefetches with up to ~¾ of logical CPUs (cap 64); **CPU** training uses about **n/4** workers (cap 16) so the main process keeps cores for ViT forward/backward, with **OMP_NUM_THREADS=1** inside workers to reduce oversubscription. With CUDA, **cuDNN benchmark** and **TF32** are enabled. Pinned memory on CUDA only.
 
 **Terminal dashboard:** with `pip install -e ".[dashboard]"`, run `bash scripts/start_dashboard.sh` (or `python scripts/pipeline_dashboard.py`) while training runs; it tails `runs/logs/current.log` when present (symlink to the active `pipeline_*.log`), else the newest timestamped log, parses epoch/loss/batch lines, and shows `manifest.tsv`.
 
-**Detached pipeline (close terminal safely):** start the full driver in the background so it survives closing the shell: `bash scripts/start_pipeline_detached.sh` (writes `runs/pipeline.pid` and mirrors stderr to `runs/logs/nohup_console.txt`). Stop with `bash scripts/kill_pipeline.sh`. To stop everything, start detached, and open the dashboard in the foreground in one go: `bash scripts/start_pipeline_and_dashboard.sh`. After you close the terminal, reopen the repo, activate the venv, and run `bash scripts/start_dashboard.sh` again to watch the **same** run via `current.log`.
+**Detached pipeline (close terminal safely):** `bash scripts/start_pipeline_detached.sh` runs the driver under `nohup` (PID in `runs/pipeline.pid`; verbose output goes to `runs/logs/current.log`, not the terminal). Stop with `bash scripts/kill_pipeline.sh`. **Reconnect later:** `bash scripts/reconnect_dashboard.sh` or `tail -f runs/logs/current.log`.
 
 From there you can work in two styles. **Ad hoc**: call `scripts/eval_baseline.py` for PCK, `scripts/train_finetune.py` for Task-style fine-tuning, or `scripts/train_lora.py` for parameter-efficient training, each with `--backbone` and the right weight flags. **Orchestrated**: `scripts/run_pipeline.py` is the single entry point. By default it runs the **full stack** (dataset check, fine-tune and LoRA for all three backbones, all PCK evaluation modes including window soft-argmax and trained checkpoints, metric export, `pytest`, and a Jupyter hint). Turn steps off in the configuration block if you need a shorter run. **SAM** weights are not in git: run `bash scripts/download_sam_vit_b.sh` once to save `checkpoints/sam_vit_b_01ec64.pth` (Meta’s official URL); the pipeline picks up that path automatically, or you can set `SAM_CHECKPOINT` / `export SAM_CHECKPOINT=...`. For tables and plots in Jupyter, install the notebook extra (`pip install -e ".[notebook]"`) and use `notebooks/verify_and_compare_results.ipynb`; it shares the same evaluation path as the CLI.
 
@@ -60,12 +60,13 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-Detached pipeline and dashboard (safe to close the terminal; reopen and run `bash scripts/start_dashboard.sh` to reconnect):
+Detached pipeline and dashboard (close the terminal anytime; reconnect with `bash scripts/reconnect_dashboard.sh` or `bash scripts/start_dashboard.sh`):
 
 ```bash
 bash scripts/kill_pipeline.sh
 bash scripts/start_pipeline_detached.sh
-bash scripts/start_dashboard.sh
+# later, in a new terminal:
+bash scripts/reconnect_dashboard.sh
 # or: bash scripts/start_pipeline_and_dashboard.sh   # kill → detached pipeline → dashboard (foreground)
 # Full restart (clear resume bookkeeping; keeps weight checkpoints): SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1 bash scripts/start_pipeline_detached.sh
 ```

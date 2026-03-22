@@ -92,7 +92,7 @@ def _maybe_limit_loader(
     if num_workers > 0:
         from utils.hardware import dataloader_extra_kwargs
 
-        dl_kw = dataloader_extra_kwargs(num_workers)
+        dl_kw = dataloader_extra_kwargs(num_workers, for_device="cuda" if pin_memory else "cpu")
     return DataLoader(
         Subset(loader.dataset, list(range(n))),
         batch_size=1,

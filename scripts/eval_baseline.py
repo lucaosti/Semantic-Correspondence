@@ -25,6 +25,7 @@ from evaluation.baseline_eval import build_eval_dataloader, evaluate_spair_loade
 from evaluation.checkpoint_loader import load_encoder_weights_from_pt
 from models.common.dense_extractor import BackboneName, DenseExtractorConfig, DenseFeatureExtractor
 from utils.hardware import (
+    apply_accelerator_throughput_tweaks,
     maybe_tune_threads_for_cpu_device,
     pin_memory_for,
     resolve_device_str,
@@ -85,8 +86,9 @@ def main() -> int:
         return 2
 
     device = torch.device(resolve_device_str(args.device))
-    maybe_tune_threads_for_cpu_device(device.type)
-    num_workers = resolve_num_workers(args.num_workers)
+    num_workers = resolve_num_workers(args.num_workers, accelerator=device.type)
+    maybe_tune_threads_for_cpu_device(device.type, dataloader_workers=num_workers)
+    apply_accelerator_throughput_tweaks(device)
     pin_mem = pin_memory_for(device)
 
     cfg = DenseExtractorConfig(

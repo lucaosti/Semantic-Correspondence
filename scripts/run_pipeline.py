@@ -19,14 +19,18 @@ Defaults run **all** steps for **all** backbones. SAM needs weights: place
 ``SAM_CHECKPOINT`` below, or export ``SAM_CHECKPOINT``.
 
 Logs: each invocation writes ``runs/logs/pipeline_<UTC_stamp>.log``, updates ``runs/logs/manifest.tsv``,
-and sets ``runs/logs/current.log`` (symlink) to that file so a detached dashboard can reconnect after closing a terminal.
+and sets ``runs/logs/current.log`` (symlink) to that file. Subprocess output is merged into the same file (see
+:class:`PipelineLogger`). With ``SEMANTIC_CORRESPONDENCE_PIPELINE_LOG_FILE_ONLY=1`` (set by
+``scripts/start_pipeline_detached.sh``), nothing is mirrored to the process stdout/stderr—use
+``scripts/reconnect_dashboard.sh`` or ``tail -f runs/logs/current.log`` to watch progress.
+
 Structured stage traces append to ``runs/logs/stage_events.jsonl`` (one JSON object per line: ``action``, ``stage_id``, ``ts_utc``, …).
 
-**Resume / interrupt:** Set ``PIPELINE_RESUME = True`` (default) to skip stages already recorded in ``runs/pipeline_state.json`` and to pass ``--resume`` into training when a ``*_resume.pt`` file exists (epoch-level checkpoint with optimizer state). Changing training/eval hyperparameters changes a **config fingerprint**; a mismatch clears remembered progress so runs are not mixed. For a deliberate full restart without deleting checkpoints, run with env ``SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1``.
+**Resume / interrupt:** Set ``PIPELINE_RESUME = True`` (default) to skip stages already recorded in ``runs/pipeline_state.json`` and to pass ``--resume`` into training when a ``*_resume.pt`` file exists (optimizer + model state). Training scripts also write that file **during** an epoch every ``--resume-save-interval`` batches (default 2500), not only after validation, so long single epochs are not lost on kill. Changing training/eval hyperparameters changes a **config fingerprint**; a mismatch clears remembered progress so runs are not mixed. For a deliberate full restart without deleting checkpoints, run with env ``SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1``.
 
 **Epochs** are set by ``FT_EPOCHS`` / ``LORA_EPOCHS`` (and ``FT_PATIENCE`` / ``LORA_PATIENCE`` for early stopping) in the SHARED CONFIG block below. Training scripts also print ``epoch k/total``, periodic batch indices, and ``train_loss`` / ``val_loss`` per epoch.
 
-**Hardware:** ``batch_size=1`` for the Gaussian loss limits GPU saturation. Set ``DEVICE`` / ``NUM_WORKERS`` to ``None`` for adaptive defaults (CUDA → MPS → CPU; worker count from ``os.cpu_count()`` and OS). Training/eval scripts use pinned memory only on CUDA and enable persistent DataLoader workers when ``num_workers > 0``.
+**Hardware:** ``batch_size=1`` for the Gaussian loss limits GPU saturation. Set ``DEVICE`` / ``NUM_WORKERS`` to ``None`` for adaptive defaults (CUDA → MPS → CPU; worker count scales with logical CPUs and accelerator—see :func:`utils.hardware.recommended_dataloader_workers`). CUDA runs enable cuDNN benchmark and TF32 in training/eval scripts. Pinned memory when ``device=cuda``; persistent DataLoader workers when ``num_workers > 0``.
 """
 
 from __future__ import annotations
@@ -99,12 +103,14 @@ DINOV3_WEIGHTS: Optional[str] = None
 SAM_CHECKPOINT: Optional[str] = str(_SAM_VIT_B_DEFAULT) if _SAM_VIT_B_DEFAULT.is_file() else None
 
 # Training hyperparameters (passed through to ``train_finetune.py`` / ``train_lora.py``).
-FT_EPOCHS: int = 50
-FT_PATIENCE: int = 5
-LORA_EPOCHS: int = 2
-LORA_PATIENCE: int = 3
+# 200 epochs per backbone for both fine-tune and LoRA (early stopping may finish sooner).
+FT_EPOCHS: int = 200
+FT_PATIENCE: int = 10
+LORA_EPOCHS: int = 200
+LORA_PATIENCE: int = 10
 # Training scripts print batch progress every N steps (0 = epoch summaries only).
-LOG_BATCH_INTERVAL: int = 2500
+# Lower on CPU-only hosts so logs/dashboard move often (each step is slow).
+LOG_BATCH_INTERVAL: int = 100
 PREPROCESS: str = "FIXED_RESIZE"
 # Multiples of ViT patch sizes used here (14 and 16): ``784 = 56*14 = 49*16``.
 IMAGE_HEIGHT: int = 784
@@ -180,16 +186,23 @@ def _trace_stage(cwd: Path, logger: "PipelineLogger", action: str, stage_id: str
     append_stage_event(cwd, {"action": action, "stage_id": stage_id, **extra})
 
 
-class PipelineLogger:
-    """Timestamped lines to stdout/stderr and a per-run log file under ``runs/logs/``."""
+def _pipeline_log_file_only() -> bool:
+    """If true, :class:`PipelineLogger` writes only to the log file (for detached + dashboard workflow)."""
+    v = os.environ.get("SEMANTIC_CORRESPONDENCE_PIPELINE_LOG_FILE_ONLY", "").strip().lower()
+    return v in ("1", "true", "yes", "on")
 
-    def __init__(self, path: Path) -> None:
+
+class PipelineLogger:
+    """Timestamped lines to a per-run log file; optionally mirrors to stdout/stderr (interactive runs)."""
+
+    def __init__(self, path: Path, *, mirror_to_terminal: bool = True) -> None:
         self.path = path.resolve()
+        self._mirror = mirror_to_terminal
         path.parent.mkdir(parents=True, exist_ok=True)
         self._fp = open(path, "w", encoding="utf-8")
         self._fp.write(f"# Pipeline run started at {self._ts()}\n")
         self._fp.write(f"# Log file: {self.path}\n")
-        self._fp.write("# Also see: runs/logs/stage_events.jsonl (structured stages) and runs/pipeline_state.json (resume).\n\n")
+        self._fp.write("# Also see: runs/logs/stage_events.jsonl and runs/pipeline_state.json (resume).\n\n")
         self._fp.flush()
 
     @staticmethod
@@ -201,9 +214,11 @@ class PipelineLogger:
         for part in line.split("\n"):
             prefixed = f"[{self._ts()}] {part}\n"
             self._fp.write(prefixed)
-            stream.write(prefixed)
+            if self._mirror:
+                stream.write(prefixed)
         self._fp.flush()
-        stream.flush()
+        if self._mirror:
+            stream.flush()
 
     def close(self, exit_code: int) -> None:
         if self._fp.closed:
@@ -490,8 +505,10 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
     ):
         _validate_triplet(name, t)
 
-    eff_workers = NUM_WORKERS if NUM_WORKERS is not None else recommended_dataloader_workers()
     eff_device = DEVICE if DEVICE is not None else recommended_device_str()
+    eff_workers = NUM_WORKERS if NUM_WORKERS is not None else recommended_dataloader_workers(
+        accelerator=eff_device
+    )
     logger.log_line(
         f"Adaptive hardware: device={eff_device} num_workers={eff_workers} "
         f"cpu_count={os.cpu_count()} platform={sys.platform}"
@@ -727,7 +744,7 @@ def main() -> int:
     os.chdir(cwd)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     log_path = cwd / "runs" / "logs" / f"pipeline_{stamp}.log"
-    logger = PipelineLogger(log_path)
+    logger = PipelineLogger(log_path, mirror_to_terminal=not _pipeline_log_file_only())
     _link_current_log_symlink(cwd, log_path)
     iso_start = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     _manifest_append(cwd, [iso_start, "start", log_path.name, ""])

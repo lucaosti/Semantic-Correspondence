@@ -206,7 +206,7 @@ def build_eval_dataloader(
     if num_workers > 0:
         from utils.hardware import dataloader_extra_kwargs
 
-        dl_kw = dataloader_extra_kwargs(num_workers)
+        dl_kw = dataloader_extra_kwargs(num_workers, for_device="cuda" if pin_memory else "cpu")
     return DataLoader(
         ds,
         batch_size=batch_size,

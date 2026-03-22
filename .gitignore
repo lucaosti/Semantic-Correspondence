@@ -69,8 +69,8 @@ datasets/
 runs/
 checkpoints/
 
-# Local papers in docs/ only (markdown under docs/ stays tracked)
-docs/*.pdf
+# Local papers in docs/ only (do not commit pdf and md files)
+docs/*
 
 # Local / secrets (do not commit)
 .env

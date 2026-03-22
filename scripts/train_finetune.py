@@ -14,7 +14,11 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Optional
+from itertools import islice
+from typing import Any, Optional
+
+# Per-epoch shuffle must be reproducible so mid-epoch resume skips the same batch order.
+_TRAIN_SHUFFLE_SEED_BASE = 90210
 
 import torch
 import torch.nn as nn
@@ -30,7 +34,9 @@ from training.early_stopping import EarlyStopping
 from training.engine import correspondence_gaussian_loss_dino_vit, correspondence_gaussian_loss_sam
 from training.unfreeze import collect_trainable_parameter_groups, freeze_all, unfreeze_last_transformer_blocks
 from utils.hardware import (
+    apply_accelerator_throughput_tweaks,
     dataloader_extra_kwargs,
+    loader_worker_init_for_device,
     maybe_tune_threads_for_cpu_device,
     pin_memory_for,
     resolve_device_str,
@@ -84,7 +90,19 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Load *_resume.pt (model + optimizer + epoch + early-stopping state) and continue training.",
     )
+    p.add_argument(
+        "--resume-save-interval",
+        type=int,
+        default=2500,
+        help="Save *_resume.pt every N training batches within an epoch (0 = only at end of each epoch).",
+    )
     return p.parse_args()
+
+
+def _save_resume_atomic(path: str, payload: dict[str, Any]) -> None:
+    tmp = path + ".tmp"
+    torch.save(payload, tmp)
+    os.replace(tmp, path)
 
 
 def _build_backbone(
@@ -118,14 +136,15 @@ def main() -> int:
         return 2
 
     device = torch.device(resolve_device_str(args.device))
-    maybe_tune_threads_for_cpu_device(device.type)
-    num_workers = resolve_num_workers(args.num_workers)
+    num_workers = resolve_num_workers(args.num_workers, accelerator=device.type)
+    maybe_tune_threads_for_cpu_device(device.type, dataloader_workers=num_workers)
     model = _build_backbone(
         args.backbone,
         d2=args.dinov2_weights,
         d3=args.dinov3_weights,
         sam_ckpt=args.sam_checkpoint,
     ).to(device)
+    apply_accelerator_throughput_tweaks(device)
 
     freeze_all(model)
     unfreeze_last_transformer_blocks(model, n_blocks=args.last_blocks)
@@ -149,16 +168,8 @@ def main() -> int:
         photometric_augment=None,
     )
 
-    dl_kw = dataloader_extra_kwargs(num_workers)
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        collate_fn=spair_collate_fn,
-        pin_memory=pin_memory_for(device),
-        **dl_kw,
-    )
+    dl_kw = dataloader_extra_kwargs(num_workers, for_device=device.type)
+    _winit = loader_worker_init_for_device(device.type, num_workers)
     val_loader = DataLoader(
         val_ds,
         batch_size=1,
@@ -166,6 +177,7 @@ def main() -> int:
         num_workers=num_workers,
         collate_fn=spair_collate_fn,
         pin_memory=pin_memory_for(device),
+        worker_init_fn=_winit,
         **dl_kw,
     )
 
@@ -177,7 +189,8 @@ def main() -> int:
     resume_path = os.path.join(
         args.checkpoint_dir, f"{args.backbone}_lastblocks{args.last_blocks}_resume.pt"
     )
-    start_epoch = -1
+    full_epochs_done = 0
+    batch_in_epoch = 0
     if args.resume:
         if os.path.isfile(args.resume):
             try:
@@ -186,7 +199,6 @@ def main() -> int:
                 blob = torch.load(args.resume, map_location=device)
             model.load_state_dict(blob["model"], strict=True)
             opt.load_state_dict(blob["optimizer"])
-            start_epoch = int(blob["epoch"])
             best_val = float(blob.get("best_val", float("inf")))
             s = blob.get("stopper") or {}
             stopper.best_value = s.get("best_value")
@@ -195,22 +207,34 @@ def main() -> int:
             stopper.patience = int(s.get("patience", stopper.patience))
             stopper.min_delta = float(s.get("min_delta", stopper.min_delta))
             stopper.mode = s.get("mode", stopper.mode)  # type: ignore[assignment]
+            if "full_epochs_done" in blob:
+                full_epochs_done = int(blob["full_epochs_done"])
+                batch_in_epoch = int(blob.get("batch_in_epoch", 0))
+            else:
+                full_epochs_done = int(blob["epoch"]) + 1
+                batch_in_epoch = 0
             print(
-                f"train_finetune: RESUME from epoch {start_epoch + 1}/{args.epochs} "
+                f"train_finetune: RESUME full_epochs_done={full_epochs_done} batch_in_epoch={batch_in_epoch} "
                 f"(file={args.resume} best_val={best_val})",
                 flush=True,
             )
+            if batch_in_epoch:
+                print(
+                    f"train_finetune: mid-epoch resume; skipping first {batch_in_epoch} batches "
+                    f"of epoch {full_epochs_done + 1}/{args.epochs} (1-based)",
+                    flush=True,
+                )
         else:
             print(
                 f"train_finetune: WARNING --resume file missing ({args.resume}); starting from scratch.",
                 flush=True,
             )
 
-    n_train_batches = len(train_loader)
+    n_train_batches = len(train_ds)
     print(
         f"train_finetune: device={device} backbone={args.backbone} "
         f"epochs={args.epochs} batches_per_epoch={n_train_batches} batch_size={args.batch_size} "
-        f"num_workers={num_workers}",
+        f"num_workers={num_workers} resume_save_interval={args.resume_save_interval}",
         flush=True,
     )
 
@@ -222,12 +246,31 @@ def main() -> int:
             return correspondence_gaussian_loss_sam(model, batch_tensors)
         return correspondence_gaussian_loss_dino_vit(model, batch_tensors, layer_indices=layer_indices)
 
-    for epoch in range(start_epoch + 1, args.epochs):
+    resume_skip_remaining = batch_in_epoch
+    for epoch in range(full_epochs_done, args.epochs):
+        skip_batches = resume_skip_remaining
+        resume_skip_remaining = 0
+        gen = torch.Generator()
+        gen.manual_seed(_TRAIN_SHUFFLE_SEED_BASE + epoch)
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            collate_fn=spair_collate_fn,
+            pin_memory=pin_memory_for(device),
+            generator=gen,
+            worker_init_fn=_winit,
+            **dl_kw,
+        )
         print(f"epoch {epoch + 1}/{args.epochs} (train batches: {n_train_batches})", flush=True)
         model.train()
         total_loss = 0.0
         n_batches = 0
-        for batch_idx, batch in enumerate(train_loader):
+        train_it = iter(train_loader)
+        if skip_batches:
+            train_it = islice(train_it, skip_batches, None)
+        for batch_idx, batch in enumerate(train_it, start=skip_batches):
             if args.log_batch_interval and batch_idx % args.log_batch_interval == 0:
                 print(f"  batch {batch_idx}/{n_train_batches}", flush=True)
             batch = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
@@ -239,6 +282,28 @@ def main() -> int:
             opt.step()
             total_loss += float(loss.detach().cpu())
             n_batches += 1
+            done_in_epoch = batch_idx + 1
+            iv = args.resume_save_interval
+            if iv > 0 and done_in_epoch % iv == 0 and done_in_epoch < n_train_batches:
+                _save_resume_atomic(
+                    resume_path,
+                    {
+                        "model": model.state_dict(),
+                        "optimizer": opt.state_dict(),
+                        "epoch": epoch,
+                        "full_epochs_done": epoch,
+                        "batch_in_epoch": done_in_epoch,
+                        "best_val": best_val,
+                        "stopper": {
+                            "patience": stopper.patience,
+                            "min_delta": stopper.min_delta,
+                            "mode": stopper.mode,
+                            "best_value": stopper.best_value,
+                            "num_bad_epochs": stopper.num_bad_epochs,
+                            "best_epoch": stopper.best_epoch,
+                        },
+                    },
+                )
         train_loss = total_loss / max(n_batches, 1)
 
         model.eval()
@@ -260,11 +325,14 @@ def main() -> int:
             ckpt = os.path.join(args.checkpoint_dir, f"{args.backbone}_lastblocks{args.last_blocks}_best.pt")
             torch.save({"model": model.state_dict(), "epoch": epoch, "val_loss": val_loss}, ckpt)
 
-        torch.save(
+        _save_resume_atomic(
+            resume_path,
             {
                 "model": model.state_dict(),
                 "optimizer": opt.state_dict(),
                 "epoch": epoch,
+                "full_epochs_done": epoch + 1,
+                "batch_in_epoch": 0,
                 "best_val": best_val,
                 "stopper": {
                     "patience": stopper.patience,
@@ -275,7 +343,6 @@ def main() -> int:
                     "best_epoch": stopper.best_epoch,
                 },
             },
-            resume_path,
         )
 
         if stopper.step(val_loss, epoch):
