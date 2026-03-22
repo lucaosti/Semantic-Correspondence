@@ -38,3 +38,5 @@ def test_build_training_command_contains_script_and_args() -> None:
     assert command[0].endswith("train_finetune.py")
     assert "--backbone" in command
     assert "dinov2_vitb14" in command
+    assert "--batch-size" in command
+    assert "100" in command

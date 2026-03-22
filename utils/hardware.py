@@ -2,7 +2,7 @@
 Host-aware defaults for PyTorch jobs: accelerator choice, DataLoader workers, pin memory.
 
 Call :func:`recommended_device_str` / :func:`recommended_dataloader_workers` when CLI args use
-``None`` or ``-1`` (auto). Keep batch size at ``1`` where the Gaussian loss requires it; workers
+``None`` or ``-1`` (auto). Training defaults to larger pair batches (see ``--batch-size``); workers
 and device selection still improve throughput.
 
 ``recommended_dataloader_workers`` picks aggressive counts: many host threads for CUDA prefetch,

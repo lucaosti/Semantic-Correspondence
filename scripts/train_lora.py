@@ -65,8 +65,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--batch-size",
         type=int,
-        default=1,
-        help="Must be 1 (current Gaussian loss expects a single pair per step).",
+        default=100,
+        help="Pairs per optimizer step (Gaussian loss averages over the batch).",
     )
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument(
@@ -120,8 +120,8 @@ def _build_backbone(name: str, *, d2, d3, sam_ckpt) -> nn.Module:
 
 def main() -> int:
     args = parse_args()
-    if args.batch_size != 1:
-        print("ERROR: --batch-size must be 1 for the Gaussian loss helpers.", file=sys.stderr)
+    if args.batch_size < 1:
+        print("ERROR: --batch-size must be >= 1.", file=sys.stderr)
         return 2
     root = resolve_spair_root(args.spair_root)
     if not os.path.isdir(root):
@@ -186,7 +186,7 @@ def main() -> int:
     _winit = loader_worker_init_for_device(device.type, num_workers)
     val_loader = DataLoader(
         val_ds,
-        batch_size=1,
+        batch_size=args.batch_size,
         shuffle=False,
         num_workers=num_workers,
         collate_fn=spair_collate_fn,
@@ -250,10 +250,9 @@ def main() -> int:
                 flush=True,
             )
 
-    n_train_batches = len(train_ds)
     print(
         f"train_lora: device={device} backbone={args.backbone} "
-        f"epochs={args.epochs} batches_per_epoch={n_train_batches} batch_size={args.batch_size} "
+        f"epochs={args.epochs} batch_size={args.batch_size} "
         f"num_workers={num_workers} resume_save_interval={args.resume_save_interval}",
         flush=True,
     )
@@ -276,6 +275,7 @@ def main() -> int:
             worker_init_fn=_winit,
             **dl_kw,
         )
+        n_train_batches = len(train_loader)
         print(f"epoch {epoch + 1}/{args.epochs} (train batches: {n_train_batches})", flush=True)
         model.train()
         total = 0.0

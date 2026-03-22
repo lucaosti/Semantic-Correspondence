@@ -8,9 +8,9 @@ If you are setting up from scratch, start from the repository root. The bootstra
 
 **Training length & progress:** the orchestrated driver (`scripts/run_pipeline.py`) defaults to **200** epochs each for fine-tuning and LoRA (all backbones), with early stopping via `FT_PATIENCE` / `LORA_PATIENCE` — edit those constants to change schedule. CLI examples below may use shorter runs. Logs: `epoch k/total`, batch indices when `--log-batch-interval` > 0, and `tail -f runs/logs/current.log`.
 
-**Hardware:** the loss uses **batch size 1**, so GPUs are rarely fully saturated. Training/eval pick **CUDA → Apple MPS → CPU** automatically when `--device` is omitted (or set `DEVICE = None` in `run_pipeline.py`). DataLoader workers default to **auto**: **CUDA** prefetches with up to ~¾ of logical CPUs (cap 64); **CPU** training uses about **n/4** workers (cap 16) so the main process keeps cores for ViT forward/backward, with **OMP_NUM_THREADS=1** inside workers to reduce oversubscription. With CUDA, **cuDNN benchmark** and **TF32** are enabled. Pinned memory on CUDA only.
+**Hardware:** training defaults to **batch size 100** pairs per step (Gaussian loss averaged over the batch). Reduce `--batch-size` if you hit OOM. Training/eval pick **CUDA → Apple MPS → CPU** automatically when `--device` is omitted (or set `DEVICE = None` in `run_pipeline.py`). DataLoader workers default to **auto**: **CUDA** prefetches with up to ~¾ of logical CPUs (cap 64); **CPU** training uses about **n/4** workers (cap 16) so the main process keeps cores for ViT forward/backward, with **OMP_NUM_THREADS=1** inside workers to reduce oversubscription. With CUDA, **cuDNN benchmark** and **TF32** are enabled. Pinned memory on CUDA only.
 
-**Pascal GPUs (e.g. GTX 1080 Ti, ~11 GB VRAM, compute capability 6.1):** batch 1 at 784×784 with ViT-B is usually fine; the SAM path uses an internal 1024×1024 resize and is the heaviest—close other GPU processes if you hit OOM. Install a PyTorch build whose CUDA binaries still include **sm_61** (check with `python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu')"`). TF32 and Tensor Core–style speedups target newer architectures; on Pascal, expect limited benefit from those toggles versus raw FP32.
+**Pascal GPUs (e.g. GTX 1080 Ti, ~11 GB VRAM, compute capability 6.1):** default batch 100 may OOM on SAM (1024×1024 internally); lower `--batch-size` or use DINO backbones first. Close other GPU processes if you hit OOM. Install a PyTorch build whose CUDA binaries still include **sm_61** (check with `python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu')"`). TF32 and Tensor Core–style speedups target newer architectures; on Pascal, expect limited benefit from those toggles versus raw FP32.
 
 **Many-core host CPUs (e.g. AMD Ryzen 7 1800X, 8 cores / 16 threads):** auto mode may choose a **large** `num_workers` (prefetch). If the CPU is saturated or the system feels sluggish, set **`NUM_WORKERS`** explicitly in `run_pipeline.py`, your YAML `--config`, or `num_workers` in the notebook config—**6–8** is a reasonable starting point. You can raise **`SEMANTIC_CORRESPONDENCE_PREFETCH_CAP`** (see `utils/hardware.py`) if you increase workers and want a deeper prefetch queue.
 
@@ -20,7 +20,7 @@ If you are setting up from scratch, start from the repository root. The bootstra
 
 From there you can work in two styles. **Ad hoc**: call `scripts/eval_baseline.py` for PCK, `scripts/train_finetune.py` for Task-style fine-tuning, or `scripts/train_lora.py` for parameter-efficient training, each with `--backbone` and the right weight flags. **Orchestrated**: `scripts/run_pipeline.py` is the single entry point. By default it runs the **full stack** (dataset check, fine-tune and LoRA for all three backbones, all PCK evaluation modes including window soft-argmax and trained checkpoints, metric export, `pytest`, and a Jupyter hint). Turn steps off in the configuration block if you need a shorter run. **SAM** weights are not in git: run `bash scripts/download_sam_vit_b.sh` once to save `checkpoints/sam_vit_b_01ec64.pth` (Meta’s official URL); the pipeline picks up that path automatically, or you can set `SAM_CHECKPOINT` / `export SAM_CHECKPOINT=...`. For tables and plots in Jupyter, install the notebook extra (`pip install -e ".[notebook]"`) and use `notebooks/verify_and_compare_results.ipynb`; it shares the same evaluation path as the CLI.
 
-Project rules—splits (`train` / `val` / `test`), no Hugging Face checkpoints for these backbones, window soft-argmax only at inference—are spelled out in **`docs/info.md`**. Italian working notes and layout expectations are in **`docs/claude.md`**. A literature-oriented overview lives in **`docs/stato-arte.md`**. Those files are the canonical place for constraints; the root README stays a practical tour of the repo.
+Project rules—splits (`train` / `val` / `test`), no Hugging Face checkpoints for these backbones, window soft-argmax only at inference—are spelled out in **`docs/info.md`**. Italian working notes and layout expectations are in **`docs/claude.md`**. A literature-oriented overview lives in **`docs/stato-arte.md`**. **Full technical reference:** **`documentation.md`** (keep it updated when changing behavior or defaults). Those files are the canonical place for constraints; the root README stays a practical tour of the repo.
 
 ### External notebook workflow
 
@@ -108,9 +108,10 @@ If you need a specific CUDA build of PyTorch, reinstall `torch` / `torchvision` 
 
 | Path | Role |
 |------|------|
+| `documentation.md` | Full technical reference (defaults, theory, maintenance; update when code changes) |
 | `data/dataset.py` | SPair-71k loading, preprocessing, splits |
 | `models/common/` | Matching, dense extractors, LoRA, window soft-argmax |
-| `models/dinov2`, `dinov3`, `sam` | Backbone code and adapters (`PAPERS.md` in each folder) |
+| `models/dinov2`, `dinov3`, `sam` | Backbone code and adapters (see each `hub_loader.py` / `backbone.py`; **`documentation.md`** for full map) |
 | `training/` | Losses, training loop helpers, unfreeze utilities |
 | `evaluation/` | PCK, baseline evaluation, `experiment_runner` (shared with scripts and notebook) |
 | `scripts/` | CLI tools and `run_pipeline.py` |

@@ -34,7 +34,7 @@ Structured stage traces append to ``runs/logs/stage_events.jsonl`` (one JSON obj
 
 **Epochs** are set by ``FT_EPOCHS`` / ``LORA_EPOCHS`` (and ``FT_PATIENCE`` / ``LORA_PATIENCE`` for early stopping) in the SHARED CONFIG block below. Training scripts also print ``epoch k/total``, periodic batch indices, and ``train_loss`` / ``val_loss`` per epoch.
 
-**Hardware:** ``batch_size=1`` for the Gaussian loss limits GPU saturation. Set ``DEVICE`` / ``NUM_WORKERS`` to ``None`` for adaptive defaults (CUDA → MPS → CPU; worker count scales with logical CPUs and accelerator—see :func:`utils.hardware.recommended_dataloader_workers`). CUDA runs enable cuDNN benchmark and TF32 in training/eval scripts. Pinned memory when ``device=cuda``; persistent DataLoader workers when ``num_workers > 0``.
+**Hardware:** training defaults to **batch size 100** pairs per step (Gaussian loss averages over the batch). Set ``DEVICE`` / ``NUM_WORKERS`` to ``None`` for adaptive defaults (CUDA → MPS → CPU; worker count scales with logical CPUs and accelerator—see :func:`utils.hardware.recommended_dataloader_workers`). CUDA runs enable cuDNN benchmark and TF32 in training/eval scripts. Pinned memory when ``device=cuda``; persistent DataLoader workers when ``num_workers > 0``. Override with ``TRAIN_BATCH_SIZE`` or ``--batch-size`` in the training CLIs.
 """
 
 from __future__ import annotations
@@ -108,6 +108,7 @@ SAM_CHECKPOINT: Optional[str] = str(_SAM_VIT_B_DEFAULT) if _SAM_VIT_B_DEFAULT.is
 
 # Training hyperparameters (passed through to ``train_finetune.py`` / ``train_lora.py``).
 # 200 epochs per backbone for both fine-tune and LoRA (early stopping may finish sooner).
+TRAIN_BATCH_SIZE: int = 100
 FT_EPOCHS: int = 200
 FT_PATIENCE: int = 10
 LORA_EPOCHS: int = 200
@@ -214,6 +215,8 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["DINOV3_WEIGHTS"] = finetune["dinov3_weights"]
         if finetune.get("sam_checkpoint") is not None:
             g["SAM_CHECKPOINT"] = str(finetune["sam_checkpoint"])
+        if finetune.get("batch_size") is not None:
+            g["TRAIN_BATCH_SIZE"] = int(finetune["batch_size"])
 
     lora = raw.get("lora") or {}
     if isinstance(lora, dict):
@@ -223,6 +226,8 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["LORA_PATIENCE"] = int(lora["patience"])
         if lora.get("rank") is not None:
             g["LORA_RANK"] = int(lora["rank"])
+        if lora.get("batch_size") is not None:
+            g["TRAIN_BATCH_SIZE"] = int(lora["batch_size"])
 
     toggles = raw.get("workflow_toggles") or {}
     if isinstance(toggles, dict):
@@ -259,6 +264,7 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "CHECKPOINT_DIR": CHECKPOINT_DIR,
         "LAST_BLOCKS": LAST_BLOCKS,
         "LORA_RANK": LORA_RANK,
+        "TRAIN_BATCH_SIZE": TRAIN_BATCH_SIZE,
         "FT_EPOCHS": FT_EPOCHS,
         "FT_PATIENCE": FT_PATIENCE,
         "LORA_EPOCHS": LORA_EPOCHS,
@@ -703,6 +709,8 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             str(IMAGE_HEIGHT),
             "--width",
             str(IMAGE_WIDTH),
+            "--batch-size",
+            str(TRAIN_BATCH_SIZE),
             "--num-workers",
             str(eff_workers),
             "--checkpoint-dir",

@@ -101,7 +101,7 @@ class TrainingJobConfig:
     patience: int = 5
     learning_rate: float = 5e-5
     weight_decay: float = 0.01
-    batch_size: int = 1
+    batch_size: int = 100
     num_workers: int = -1
     log_batch_interval: int = 2500
     resume_save_interval: int = 2500
@@ -127,7 +127,7 @@ class NotebookWorkflowConfig:
             patience=3,
             learning_rate=1e-3,
             weight_decay=0.0,
-            batch_size=1,
+            batch_size=100,
             num_workers=-1,
             log_batch_interval=2500,
             resume_save_interval=2500,

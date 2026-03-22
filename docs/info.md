@@ -22,7 +22,7 @@ Scripts that report benchmark numbers should use `--split test` unless you inten
 
 ## Training
 
-- The Gaussian correspondence loss is written for **batch size 1** (one image pair per step). Training scripts default to `--batch-size 1`; keep it unless the loss and collate are extended for larger batches.
+- The Gaussian correspondence loss **averages over pairs in a batch**. Training scripts default to **`--batch-size 100`** (pairs per optimizer step). Use `1` only if you need minimal memory; larger batches improve GPU utilization when VRAM allows.
 
 ## Language
 
