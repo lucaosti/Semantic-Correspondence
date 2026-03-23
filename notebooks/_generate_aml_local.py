@@ -36,13 +36,13 @@ cells.append(
         [
             "# Semantic Correspondence — Linux + NVIDIA (Jupyter)",
             "",
-            "Presupposto: **repository** e **dataset** (`data/SPair-71k/`) sono già sulla macchina. Il notebook **non** clona, **non** scarica e **non** estrae il dataset.",
+            "Assumption: the **repository** and **dataset** (`data/SPair-71k/`) are already on the machine. This notebook does **not** clone, **not** download, and **not** extract the dataset.",
             "",
-            "Flusso: **1** repo+GPU → **2** cartelle di progresso nel progetto → **3** `pip install` → **4** pesi/config → **5** pipeline.",
+            "Flow: **1** repo+GPU → **2** project progress folders → **3** `pip install` → **4** weights/config → **5** pipeline.",
             "",
-            "**Progresso** — Log, `pipeline_state.json`, checkpoint e pesi stanno in **`runs/`** e **`checkpoints/`** nella root del repo (vedi `.gitignore`).",
+            "**Progress** — Logs, `pipeline_state.json`, checkpoints, and weights are stored in **`runs/`** and **`checkpoints/`** at the repo root (see `.gitignore`).",
             "",
-            "**GPU** — Cella 1 abilita ottimizzazioni NVIDIA; il `config.yaml` usa `device: cuda` e `num_workers: -1` (auto per CUDA in `utils.hardware`).",
+            "**GPU** — Cell 1 enables NVIDIA optimizations; `config.yaml` uses `device: cuda` and `num_workers: -1` (CUDA auto mode in `utils.hardware`).",
         ]
     )
 )
@@ -77,7 +77,7 @@ cells.append(
             "",
             "if not torch.cuda.is_available():",
             "    print(",
-            '        "WARNING: CUDA non disponibile. Installa PyTorch con CUDA e verifica nvidia-smi."',
+            '        "WARNING: CUDA is not available. Install a CUDA-enabled PyTorch build and verify with nvidia-smi."',
             "    )",
             "else:",
             "    torch.cuda.set_device(0)",
@@ -97,9 +97,9 @@ cells.append(
 cells.append(
     cell_md(
         [
-            "### 2. Progresso nel progetto (`runs/` e `checkpoints/`)",
+            "### 2. Project progress (`runs/` and `checkpoints/`)",
             "",
-            "Tutto ciò che la pipeline scrive (log, stato, checkpoint addestrati, pesi scaricati dagli script) resta **dentro il repository** in `runs/` e `checkpoints/` (non symlink, non Drive, non home).",
+            "Everything written by the pipeline (logs, state files, trained checkpoints, downloaded weights) stays **inside the repository** under `runs/` and `checkpoints/` (no symlink, no Drive, no home folder).",
         ]
     )
 )
@@ -124,7 +124,7 @@ cells.append(
             'for name in ("runs", "checkpoints"):',
             "    (REPO / name).mkdir(parents=True, exist_ok=True)",
             "",
-            'print("Progresso e artefatti nel repo:")',
+            'print("Progress and artifacts in repo:")',
             'print(" ", REPO / "runs")',
             'print(" ", REPO / "checkpoints")',
         ]
@@ -134,9 +134,9 @@ cells.append(
 cells.append(
     cell_md(
         [
-            "### 3. Installazione pacchetto (`pip install -e`)",
+            "### 3. Package installation (`pip install -e`)",
             "",
-            "Solo dipendenze Python del progetto. Il dataset non viene toccato.",
+            "Only project Python dependencies are installed. The dataset is not modified.",
         ]
     )
 )
@@ -171,16 +171,16 @@ cells.append(
 cells.append(
     cell_md(
         [
-            "### 4. Pesi pre-addestrati e `config.yaml`",
+            "### 4. Pretrained weights and `config.yaml`",
             "",
             "| Parametro | Valori | Effetto |",
             "|-----------|--------|---------|",
             '| `PIPELINE_RUN_MODE` | `"full"` | verify + fine-tuning + eval + export |',
-            '| | `"finetune_only"` | solo `train_finetune` sui tre backbone |',
-            "| `START_FROM_SCRATCH` | `True` / `False` | da zero (no resume) vs resume |",
-            "| `RESTORE_CONFIG_FROM_ARTIFACTS` | `True` | ripristina da `runs/notebook_config.yaml` nel repo e applica i parametri sopra |",
+            '| | `"finetune_only"` | run only `train_finetune` on all three backbones |',
+            "| `START_FROM_SCRATCH` | `True` / `False` | start fresh (no resume) vs resume |",
+            "| `RESTORE_CONFIG_FROM_ARTIFACTS` | `True` | restore from `runs/notebook_config.yaml` and re-apply the parameters above |",
             "",
-            "Backup automatico del config in **`runs/notebook_config.yaml`**. Hyperparametri: `_build_fresh_config_dict()`.",
+            "Automatic config backup to **`runs/notebook_config.yaml`**. Hyperparameters are defined in `_build_fresh_config_dict()`.",
         ]
     )
 )
@@ -301,7 +301,7 @@ cells.append(
             "if RESTORE_CONFIG_FROM_ARTIFACTS:",
             "    if not os.path.isfile(BACKUP_CFG):",
             "        raise FileNotFoundError(",
-            '            "Manca runs/notebook_config.yaml. Esegui prima con RESTORE_CONFIG_FROM_ARTIFACTS=False."',
+            '            "Missing runs/notebook_config.yaml. Run once with RESTORE_CONFIG_FROM_ARTIFACTS=False first."',
             "        )",
             "    shutil.copy(BACKUP_CFG, cfg_path)",
             "    with open(cfg_path, encoding='utf-8') as f:",
@@ -313,13 +313,22 @@ cells.append(
             "        yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True, default_flow_style=False)",
             '    print("Config restored + mode applied:", cfg_path)',
             "else:",
-            "    !python scripts/download_pretrained_weights.py",
+            "    import subprocess",
+            "    import sys",
+            "",
+            "    subprocess.run([sys.executable, 'scripts/download_pretrained_weights.py'], check=True)",
             "",
             '    d2 = f"{REPO}/checkpoints/dinov2_vitb14_pretrain.pth"',
             '    d3 = f"{REPO}/checkpoints/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth"',
             '    sam = f"{REPO}/checkpoints/sam_vit_b_01ec64.pth"',
+            "    missing = []",
             "    for label, p in (('DINOv2', d2), ('DINOv3', d3), ('SAM', sam)):",
-            '        print(label, "OK" if os.path.isfile(p) else "MISSING", p)',
+            "        ok = os.path.isfile(p)",
+            '        print(label, "OK" if ok else "MISSING", p)',
+            "        if not ok:",
+            "            missing.append((label, p))",
+            "    if missing:",
+            "        raise RuntimeError(f'Pesi mancanti dopo download: {missing}')",
             "",
             "    cfg = _build_fresh_config_dict()",
             "    with open(cfg_path, 'w', encoding='utf-8') as f:",
@@ -327,7 +336,7 @@ cells.append(
             '    print("Written:", cfg_path)',
             "",
             "shutil.copy(cfg_path, BACKUP_CFG)",
-            'print("Config salvato anche in:", BACKUP_CFG)',
+            'print("Config also saved to:", BACKUP_CFG)',
             "",
             "print(",
             '    f"Mode={PIPELINE_RUN_MODE} | from_scratch={START_FROM_SCRATCH} | pipeline_resume={not START_FROM_SCRATCH}"',
@@ -339,9 +348,9 @@ cells.append(
 cells.append(
     cell_md(
         [
-            "### 5. Esecuzione pipeline",
+            "### 5. Run pipeline",
             "",
-            "Rieseguire la **sezione 4** dopo ogni modifica ai parametri. Con `START_FROM_SCRATCH = True` viene impostato `SEMANTIC_CORRESPONDENCE_PIPELINE_RESET`.",
+            "Re-run **section 4** after any parameter change. With `START_FROM_SCRATCH = True`, `SEMANTIC_CORRESPONDENCE_PIPELINE_RESET` is set.",
         ]
     )
 )
@@ -376,9 +385,9 @@ cells.append(
 cells.append(
     cell_md(
         [
-            "### 6. Dashboard log (opzionale)",
+            "### 6. Dashboard logs (optional)",
             "",
-            "Mostra lo stato della pipeline sui file di log in `runs/logs/`.",
+            "Shows pipeline status from log files in `runs/logs/`.",
         ]
     )
 )

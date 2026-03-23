@@ -14,12 +14,75 @@ Usage (from repository root)::
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
+import tempfile
+import urllib.request
 from pathlib import Path
+from typing import Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
+D3_EXPECTED_SHA256 = "73cec8be7427c8655ceced13ce62f6e20a1fa90d1b4d4a550df17a1144081a7c"
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _download_http_url(url: str, dest: Path, *, expected_sha256: str | None = None) -> None:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Semantic-Correspondence downloader/1.0",
+            "Accept": "*/*",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        if int(getattr(resp, "status", 200)) >= 400:
+            raise RuntimeError(f"HTTP error while downloading {url}")
+        with tempfile.NamedTemporaryFile("wb", delete=False, dir=str(dest.parent)) as tmp:
+            while True:
+                data = resp.read(1024 * 1024)
+                if not data:
+                    break
+                tmp.write(data)
+            tmp_path = Path(tmp.name)
+    try:
+        if expected_sha256 is not None:
+            got = _sha256_file(tmp_path)
+            if got.lower() != expected_sha256.lower():
+                raise RuntimeError(
+                    f"SHA256 mismatch for {url}: expected {expected_sha256}, got {got}"
+                )
+        os.replace(tmp_path, dest)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
+
+def _download_with_fallbacks(
+    *,
+    urls: Sequence[str],
+    dest: Path,
+    expected_sha256: str | None = None,
+) -> None:
+    errors: list[str] = []
+    for url in urls:
+        try:
+            print(f"Trying: {url}")
+            _download_http_url(url, dest, expected_sha256=expected_sha256)
+            print(f"Downloaded: {dest}")
+            return
+        except Exception as exc:
+            errors.append(f"- {url}: {exc}")
+    joined = "\n".join(errors)
+    raise RuntimeError(f"All download URLs failed:\n{joined}")
 
 
 def main() -> int:
@@ -51,12 +114,28 @@ def main() -> int:
         weights=Weights.LVD1689M,
         hash="73cec8be",
     )
-    dest_d3 = ckpt / os.path.basename(url_d3.replace("\\", "/"))
+    dest_d3 = ckpt / "dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth"
     if not dest_d3.is_file():
-        print(f"Downloading DINOv3: {url_d3}")
-        torch.hub.download_url_to_file(url_d3, str(dest_d3))
+        print("Downloading DINOv3 (with URL fallbacks)...")
+        d3_url_override = os.environ.get("DINOV3_WEIGHTS_URL", "").strip()
+        fallback_urls = [
+            url_d3,
+            # Official model repository (if the .pth artifact is available to your account).
+            "https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m/resolve/main/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth?download=true",
+            # Community mirrors with the same known SHA256.
+            "https://huggingface.co/REPA-E/iREPA-collections/resolve/ece5c3539c805644084db6fc299d190a8eab73d8/pretrained_models/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth?download=true",
+            "https://huggingface.co/XavierJiezou/co2s-models/resolve/main/pretrained/dinov3_vitb16_pretrain_lvd1689m.pth?download=true",
+        ]
+        urls = ([d3_url_override] if d3_url_override else []) + fallback_urls
+        _download_with_fallbacks(urls=urls, dest=dest_d3, expected_sha256=D3_EXPECTED_SHA256)
     else:
         print(f"Already present: {dest_d3}")
+        got_sha = _sha256_file(dest_d3)
+        if got_sha.lower() != D3_EXPECTED_SHA256.lower():
+            raise RuntimeError(
+                f"Existing DINOv3 file hash mismatch for {dest_d3}: {got_sha}. "
+                "Delete the file and rerun download_pretrained_weights.py."
+            )
 
     sam_script = ROOT / "scripts" / "download_sam_vit_b.sh"
     subprocess.run(["bash", str(sam_script)], cwd=str(ROOT), check=True)
