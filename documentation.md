@@ -218,6 +218,7 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.15)`** (`EVAL_ALPHAS` in
 ## 9. Hardware-aware behavior (`utils/hardware.py`)
 
 - **Device resolution:** CUDA → MPS → CPU when device is `None`.
+- **Multi-GPU selection:** if `CUDA_VISIBLE_DEVICES` is set, only those GPUs are visible to the process; the first visible one is used as logical `cuda:0`.
 - **`num_workers`:** CLI `-1` means auto via `recommended_dataloader_workers` (CUDA: aggressive prefetch; CPU training: smaller pool).
 - **CUDA:** `cudnn.benchmark`, TF32 allow where supported, `pin_memory`, `persistent_workers` + `prefetch_factor` when workers > 0.
 

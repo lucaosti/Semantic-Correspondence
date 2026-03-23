@@ -10,6 +10,22 @@ If you are setting up from scratch, start from the repository root. The bootstra
 
 **Hardware:** training defaults to **batch size 100** pairs per step (Gaussian loss averaged over the batch). Reduce `--batch-size` if you hit OOM. Training/eval pick **CUDA → Apple MPS → CPU** automatically when `--device` is omitted (or set `DEVICE = None` in `run_pipeline.py`). DataLoader workers default to **auto**: **CUDA** prefetches with up to ~¾ of logical CPUs (cap 64); **CPU** training uses about **n/4** workers (cap 16) so the main process keeps cores for ViT forward/backward, with **OMP_NUM_THREADS=1** inside workers to reduce oversubscription. With CUDA, **cuDNN benchmark** and **TF32** are enabled. Pinned memory on CUDA only.
 
+**NVIDIA/CUDA checklist (recommended before long runs):**
+
+1. Confirm the GPU is visible to the system:
+   ```bash
+   nvidia-smi
+   ```
+2. Confirm your installed PyTorch build can use CUDA:
+   ```bash
+   python -c "import torch; print('cuda_available=', torch.cuda.is_available()); print('cuda_version=', torch.version.cuda); print('device0=', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu')"
+   ```
+3. If CUDA is unavailable, reinstall `torch`/`torchvision` from the [official PyTorch installer](https://pytorch.org/get-started/locally/) for your driver + CUDA stack.
+
+**Multi-GPU note:** this project uses CUDA's default visible device index. To force one GPU, set `CUDA_VISIBLE_DEVICES` before running scripts (for example, `CUDA_VISIBLE_DEVICES=1 ...`). After masking, the selected GPU becomes logical `cuda:0` for the process.
+
+**Forcing CUDA in the orchestrated pipeline:** `scripts/run_pipeline.py` does not expose a `--device` CLI flag; set it in YAML with `runtime.device: "cuda"` and run with `--config`.
+
 **Pascal GPUs (e.g. GTX 1080 Ti, ~11 GB VRAM, compute capability 6.1):** default batch 100 may OOM on SAM (1024×1024 internally); lower `--batch-size` or use DINO backbones first. Close other GPU processes if you hit OOM. Install a PyTorch build whose CUDA binaries still include **sm_61** (check with `python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu')"`). TF32 and Tensor Core–style speedups target newer architectures; on Pascal, expect limited benefit from those toggles versus raw FP32.
 
 **Many-core host CPUs (e.g. AMD Ryzen 7 1800X, 8 cores / 16 threads):** auto mode may choose a **large** `num_workers` (prefetch). If the CPU is saturated or the system feels sluggish, set **`NUM_WORKERS`** explicitly in `run_pipeline.py`, your YAML `--config`, or `num_workers` in the notebook config—**6–8** is a reasonable starting point. You can raise **`SEMANTIC_CORRESPONDENCE_PREFETCH_CAP`** (see `utils/hardware.py`) if you increase workers and want a deeper prefetch queue.
@@ -61,28 +77,32 @@ Baseline PCK (use `--split test` for reported numbers; `val` for quick checks):
 
 ```bash
 python scripts/eval_baseline.py --backbone dinov2_vitb14 --split test --device cuda
-python scripts/eval_baseline.py --backbone dinov3_vitb16 --dinov3-weights /path/to/weights.pth --split test
-python scripts/eval_baseline.py --backbone sam_vit_b --sam-checkpoint /path/to/sam_vit_b_01ec64.pth --split test
-python scripts/eval_baseline.py --backbone dinov2_vitb14 --split test --window-soft-argmax --wsa-window 5
+python scripts/eval_baseline.py --backbone dinov3_vitb16 --dinov3-weights /path/to/weights.pth --split test --device cuda
+python scripts/eval_baseline.py --backbone sam_vit_b --sam-checkpoint /path/to/sam_vit_b_01ec64.pth --split test --device cuda
+python scripts/eval_baseline.py --backbone dinov2_vitb14 --split test --window-soft-argmax --wsa-window 5 --device cuda
 ```
 
 Fine-tuned or LoRA checkpoints:
 
 ```bash
-python scripts/eval_baseline.py --backbone dinov2_vitb14 --checkpoint checkpoints/dinov2_vitb14_lastblocks2_best.pt --split test
+python scripts/eval_baseline.py --backbone dinov2_vitb14 --checkpoint checkpoints/dinov2_vitb14_lastblocks2_best.pt --split test --device cuda
 ```
 
 Training:
 
 ```bash
-python scripts/train_finetune.py --backbone dinov2_vitb14 --epochs 50 --patience 5
-python scripts/train_lora.py --backbone dinov2_vitb14 --epochs 2
+python scripts/train_finetune.py --backbone dinov2_vitb14 --epochs 50 --patience 5 --device cuda
+python scripts/train_lora.py --backbone dinov2_vitb14 --epochs 2 --device cuda
 ```
 
 Optional driver and tests:
 
 ```bash
-python scripts/run_pipeline.py
+# example config (config.yaml):
+# runtime:
+#   device: "cuda"
+#   num_workers: -1
+python scripts/run_pipeline.py --config config.yaml
 pip install -e ".[dev]"
 pytest -q
 ```
