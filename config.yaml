@@ -5,7 +5,7 @@ paths:
   output_dir: /home/user/Scrivania/Semantic-Correspondence/runs/notebook_exports
 runtime:
   device: cuda
-  num_workers: -1
+  num_workers: 4
   preprocess: FIXED_RESIZE
   image_height: 784
   image_width: 784
@@ -20,17 +20,17 @@ runtime:
   log_batch_interval: 100
 finetune:
   last_blocks: 2
-  epochs: 50
+  epochs: 100
   patience: 10
-  batch_size: 100
+  batch_size: 10
   dinov2_weights: /home/user/Scrivania/Semantic-Correspondence/checkpoints/dinov2_vitb14_pretrain.pth
   dinov3_weights: /home/user/Scrivania/Semantic-Correspondence/checkpoints/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth
   sam_checkpoint: /home/user/Scrivania/Semantic-Correspondence/checkpoints/sam_vit_b_01ec64.pth
 lora:
   rank: 16
-  epochs: 5
+  epochs: 100
   patience: 3
-  batch_size: 100
+  batch_size: 10
 workflow_toggles:
   run_verify_dataset: true
   train_finetune:

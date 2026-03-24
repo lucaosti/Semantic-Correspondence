@@ -137,8 +137,18 @@ def main() -> int:
                 "Delete the file and rerun download_pretrained_weights.py."
             )
 
-    sam_script = ROOT / "scripts" / "download_sam_vit_b.sh"
-    subprocess.run(["bash", str(sam_script)], cwd=str(ROOT), check=True)
+    dest_sam = ckpt / "sam_vit_b_01ec64.pth"
+    if not dest_sam.is_file():
+        print("Downloading SAM (with URL fallbacks)...")
+        sam_urls = [
+            "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
+            "https://huggingface.co/scenario-labs/sam_vit/resolve/1c5c33ad1abe579854e3e2a6228568026aea6758/sam_vit_b_01ec64.pth?download=true",
+            "https://huggingface.co/fofr/comfyui/resolve/76574336fbb61a96825dbe0b41bda2f2ec214084/sams/sam_vit_b_01ec64.pth?download=true"
+        ]
+        _download_with_fallbacks(urls=sam_urls, dest=dest_sam)
+    else:
+        print(f"Already present: {dest_sam}")
+
     print(f"All pretrained weights under {ckpt}/")
     return 0
 
