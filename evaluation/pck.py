@@ -36,7 +36,7 @@ def pck_distance(
     pck_threshold:
         Scalar tensor (or broadcastable) with the bbox-based tolerance scale.
     alpha:
-        Relative threshold (e.g., ``0.05``, ``0.10``, ``0.15``).
+        Relative threshold (e.g., ``0.05``, ``0.10``, ``0.20``).
     invalid_value:
         Keypoints whose ground-truth coordinates equal this value are ignored (padding).
 

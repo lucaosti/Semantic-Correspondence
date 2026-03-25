@@ -57,7 +57,16 @@ def sample_features_bilinear(
     gy = (yf / max(hf - 1, 1)) * 2.0 - 1.0
     grid = torch.stack([gx, gy], dim=-1).view(1, -1, 1, 2).to(dtype=feat_map.dtype, device=feat_map.device)
 
-    sampled = F.grid_sample(feat_map, grid, mode="bilinear", padding_mode="border", align_corners=align_corners)
+    # Apple MPS backend does not currently support `padding_mode="border"` for `grid_sample`.
+    # Fall back to "zeros" on MPS so evaluation/training can run on macOS without forcing CPU.
+    padding_mode = "zeros" if feat_map.device.type == "mps" else "border"
+    sampled = F.grid_sample(
+        feat_map,
+        grid,
+        mode="bilinear",
+        padding_mode=padding_mode,
+        align_corners=align_corners,
+    )
     return sampled[0, :, :, 0].transpose(0, 1).contiguous()
 
 

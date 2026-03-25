@@ -76,7 +76,7 @@ def evaluate_spair_loader(
     loader: DataLoader,
     extractor: DenseFeatureExtractor,
     *,
-    alphas: Sequence[float] = (0.05, 0.1, 0.15),
+    alphas: Sequence[float] = (0.05, 0.1, 0.2),
     use_window_soft_argmax: bool = False,
     wsa_window: int = 5,
     wsa_temperature: float = 1.0,
@@ -174,6 +174,7 @@ def build_eval_dataloader(
     preprocess: str = "fixed_resize",
     output_size_hw: Tuple[int, int] = (784, 784),
     pin_memory: Optional[bool] = None,
+    dataset_backend: str = "native",
 ) -> DataLoader:
     """
     Convenience constructor for evaluation dataloaders with safe defaults.
@@ -189,33 +190,63 @@ def build_eval_dataloader(
     pin_memory:
         If ``None``, enables pinned memory when CUDA is available (legacy default).
     """
-    from data.dataset import PreprocessMode
-
     if pin_memory is None:
         pin_memory = torch.cuda.is_available()
-    mode = PreprocessMode[preprocess.strip().upper()]
-    ds = SPair71kPairDataset(
-        spair_root=spair_root,
-        split=split,
-        preprocess=mode,
-        output_size_hw=output_size_hw,
-        normalize=True,
-        photometric_augment=None,
-    )
-    dl_kw = {}
-    if num_workers > 0:
-        from utils.hardware import dataloader_extra_kwargs
+    if dataset_backend == "native":
+        from data.dataset import PreprocessMode
 
-        dl_kw = dataloader_extra_kwargs(num_workers, for_device="cuda" if pin_memory else "cpu")
-    return DataLoader(
-        ds,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        collate_fn=spair_collate_fn,
-        pin_memory=pin_memory,
-        **dl_kw,
-    )
+        mode = PreprocessMode[preprocess.strip().upper()]
+        ds = SPair71kPairDataset(
+            spair_root=spair_root,
+            split=split,
+            preprocess=mode,
+            output_size_hw=output_size_hw,
+            normalize=True,
+            photometric_augment=None,
+        )
+        dl_kw = {}
+        if num_workers > 0:
+            from utils.hardware import dataloader_extra_kwargs
+
+            dl_kw = dataloader_extra_kwargs(num_workers, for_device="cuda" if pin_memory else "cpu")
+        return DataLoader(
+            ds,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=spair_collate_fn,
+            pin_memory=pin_memory,
+            **dl_kw,
+        )
+
+    if dataset_backend == "sd4match":
+        from data.interface import DatasetConfig, RuntimeConfig, build_dataset, build_dataloader
+
+        # SD4Match expects DATASET.ROOT to be the parent directory containing SPair-71k.
+        import os as _os
+
+        dataset_parent = _os.path.dirname(_os.path.abspath(spair_root))
+        ds = build_dataset(
+            dataset=DatasetConfig(backend="sd4match", name="spair", root=dataset_parent),
+            runtime=RuntimeConfig(
+                preprocess=preprocess,
+                image_height=int(output_size_hw[0]),
+                image_width=int(output_size_hw[1]),
+                num_workers=num_workers,
+            ),
+            split=split,
+            spair_root=None,
+        )
+        return build_dataloader(
+            ds,
+            backend="sd4match",
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+        )
+
+    raise ValueError(f"Unknown dataset_backend={dataset_backend!r} (expected 'native' or 'sd4match').")
 
 
 __all__ = ["EvalAccumulator", "build_eval_dataloader", "evaluate_spair_loader"]

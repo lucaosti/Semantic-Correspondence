@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--preprocess", type=str, default="FIXED_RESIZE", help="PreprocessMode enum name (e.g. FIXED_RESIZE).")
     p.add_argument("--height", type=int, default=784)
     p.add_argument("--width", type=int, default=784)
-    p.add_argument("--alphas", type=float, nargs="+", default=[0.05, 0.1, 0.15])
+    p.add_argument("--alphas", type=float, nargs="+", default=[0.05, 0.1, 0.2])
     p.add_argument("--window-soft-argmax", action="store_true", help="Apply inference-only window soft-argmax (Task 3).")
     p.add_argument("--wsa-window", type=int, default=5)
     p.add_argument("--wsa-temperature", type=float, default=1.0)

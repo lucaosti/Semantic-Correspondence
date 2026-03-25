@@ -96,6 +96,12 @@ PRINT_JUPYTER_NOTEBOOK_HINT: bool = True
 # ``None`` → ``data/paths.resolve_spair_root()`` (env ``SPAIR_ROOT`` / default under ``data/``).
 SPAIR_ROOT: Optional[str] = None
 
+# Dataset/metrics backend selection (PDF-first portability).
+# - dataset backend controls how samples are loaded
+# - metrics backend controls how PCK is aggregated/reported
+DATASET_BACKEND: str = "sd4match"  # "sd4match" | "native"
+METRICS_BACKEND: str = "sd4match"  # "sd4match" | "native"
+
 CHECKPOINT_DIR: str = "checkpoints"
 LAST_BLOCKS: int = 2
 LORA_RANK: int = 8
@@ -128,7 +134,8 @@ DEVICE: Optional[str] = None
 # Evaluation split: ``test`` for benchmark numbers (see ``docs/info.md``); use ``val`` for faster runs.
 EVAL_SPLIT: str = "test"
 EVAL_LIMIT: int = 0  # >0: only first N pairs per run (debug)
-EVAL_ALPHAS: Tuple[float, ...] = (0.05, 0.1, 0.15)
+# PDF default thresholds.
+EVAL_ALPHAS: Tuple[float, ...] = (0.05, 0.1, 0.2)
 
 # Explicit checkpoint paths for eval rows (defaults match training script outputs).
 # Set to a string path or leave None to use ``<CHECKPOINT_DIR>/<auto_name>`` when the flag above is True.
@@ -166,6 +173,13 @@ def _apply_pipeline_yaml(path: Path) -> None:
         raise TypeError(f"Expected a YAML mapping in {path}, got {type(raw).__name__}")
 
     g = globals()
+
+    ds = raw.get("dataset") or {}
+    if isinstance(ds, dict):
+        if ds.get("backend") is not None:
+            g["DATASET_BACKEND"] = str(ds["backend"])
+        if ds.get("metrics_backend") is not None:
+            g["METRICS_BACKEND"] = str(ds["metrics_backend"])
 
     paths = raw.get("paths") or {}
     if isinstance(paths, dict):
@@ -261,6 +275,8 @@ def _fingerprint_payload() -> Dict[str, Any]:
     """Serializable config for :func:`utils.pipeline_state.fingerprint_from_config`."""
     return {
         "SPAIR_ROOT": SPAIR_ROOT,
+        "DATASET_BACKEND": DATASET_BACKEND,
+        "METRICS_BACKEND": METRICS_BACKEND,
         "CHECKPOINT_DIR": CHECKPOINT_DIR,
         "LAST_BLOCKS": LAST_BLOCKS,
         "LORA_RANK": LORA_RANK,
@@ -465,6 +481,8 @@ def _build_eval_specs(
                     name=f"{backbone}_baseline",
                     backbone=backbone,
                     split=EVAL_SPLIT,
+                    dataset_backend=DATASET_BACKEND,
+                    metrics_backend=METRICS_BACKEND,
                     dinov2_weights=d2,
                     dinov3_weights=d3,
                     sam_checkpoint=sam,
@@ -481,6 +499,8 @@ def _build_eval_specs(
                     name=f"{backbone}_baseline_wsa",
                     backbone=backbone,
                     split=EVAL_SPLIT,
+                    dataset_backend=DATASET_BACKEND,
+                    metrics_backend=METRICS_BACKEND,
                     dinov2_weights=d2,
                     dinov3_weights=d3,
                     sam_checkpoint=sam,
@@ -507,6 +527,8 @@ def _build_eval_specs(
                         name=f"{backbone}_finetuned",
                         backbone=backbone,
                         split=EVAL_SPLIT,
+                        dataset_backend=DATASET_BACKEND,
+                        metrics_backend=METRICS_BACKEND,
                         dinov2_weights=d2,
                         dinov3_weights=d3,
                         sam_checkpoint=sam,
@@ -531,6 +553,8 @@ def _build_eval_specs(
                         name=f"{backbone}_lora",
                         backbone=backbone,
                         split=EVAL_SPLIT,
+                        dataset_backend=DATASET_BACKEND,
+                        metrics_backend=METRICS_BACKEND,
                         dinov2_weights=d2,
                         dinov3_weights=d3,
                         sam_checkpoint=sam,
@@ -565,7 +589,46 @@ def _export_tables(
             w = csv.DictWriter(f, fieldnames=fieldnames)
             w.writeheader()
             w.writerows(rows)
-    logger.log_line(f"Wrote {json_path} and {csv_path}.")
+
+    # PDF requirement: keep per-image and per-point results available by default when using
+    # SD4Match metrics backend. These are stored as separate JSON files for convenience.
+    per_image = []
+    per_point = []
+    by_difficulty_flag = []
+    for r in results:
+        if "sd4match_per_image" in r:
+            per_image.append({"name": r.get("name"), "split": r.get("spec", {}).get("split"), "data": r["sd4match_per_image"]})
+        if "sd4match_per_point" in r:
+            per_point.append({"name": r.get("name"), "split": r.get("spec", {}).get("split"), "data": r["sd4match_per_point"]})
+        if "sd4match_by_difficulty_flag" in r:
+            by_difficulty_flag.append(
+                {
+                    "name": r.get("name"),
+                    "split": r.get("spec", {}).get("split"),
+                    "data": r["sd4match_by_difficulty_flag"],
+                }
+            )
+    per_image_path = out_dir / "pck_results_per_image.json"
+    per_point_path = out_dir / "pck_results_per_point.json"
+    by_difficulty_flag_path = out_dir / "pck_results_by_difficulty_flag.json"
+    if per_image:
+        with open(per_image_path, "w", encoding="utf-8") as f:
+            json.dump(per_image, f, indent=2)
+    if per_point:
+        with open(per_point_path, "w", encoding="utf-8") as f:
+            json.dump(per_point, f, indent=2)
+    if by_difficulty_flag:
+        with open(by_difficulty_flag_path, "w", encoding="utf-8") as f:
+            json.dump(by_difficulty_flag, f, indent=2)
+
+    wrote = [str(json_path), str(csv_path)]
+    if per_image:
+        wrote.append(str(per_image_path))
+    if per_point:
+        wrote.append(str(per_point_path))
+    if by_difficulty_flag:
+        wrote.append(str(by_difficulty_flag_path))
+    logger.log_line("Wrote " + " | ".join(wrote) + ".")
 
 
 def _run_eval_and_export(

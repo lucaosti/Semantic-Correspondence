@@ -69,6 +69,9 @@ datasets/
 runs/
 checkpoints/
 
+# Notebook-generated pipeline config (machine-specific absolute paths)
+config.yaml
+
 # Local papers under docs/ (PDFs stay private; Markdown guidelines are tracked)
 docs/**/*.pdf
 

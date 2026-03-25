@@ -85,7 +85,7 @@ class RuntimeConfig:
     image_height: int = 784
     image_width: int = 784
     limit_pairs: int = 0
-    alphas: Tuple[float, float, float] = (0.05, 0.1, 0.15)
+    alphas: Tuple[float, float, float] = (0.05, 0.1, 0.2)
     sample_split: str = "val"
     sample_index: int = 0
     wsa_window: int = 5

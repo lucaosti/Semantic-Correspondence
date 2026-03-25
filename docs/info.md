@@ -12,8 +12,9 @@ Scripts that report benchmark numbers should use `--split test` unless you inten
 
 ## Backbone weights
 
-- **Do not** use Hugging Face Hub checkpoints for **DINOv2**, **DINOv3**, or **SAM** image encoders in this project.
-- Load official weights via Meta URLs or local paths, as documented in each backbone module and in [`README.md`](../README.md).
+- Prefer **official** weight sources (Meta URLs / upstream project URLs) or local paths.
+- **Hugging Face mirrors are allowed only as a fallback** when official URLs fail (some upstream hosts can intermittently 401/403).
+- When using any mirror, downloads must be protected by **SHA256 verification** when a known hash is available (see [`scripts/download_pretrained_weights.py`](../scripts/download_pretrained_weights.py)).
 
 ## Window soft-argmax (WSA)
 

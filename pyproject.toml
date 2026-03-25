@@ -33,7 +33,7 @@ dashboard = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["data*", "models*", "training*", "evaluation*", "utils*"]
+include = ["data*", "models*", "training*", "evaluation*", "utils*", "third_party*"]
 
 [tool.ruff]
 line-length = 100

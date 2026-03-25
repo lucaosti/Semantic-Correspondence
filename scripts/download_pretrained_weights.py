@@ -120,9 +120,8 @@ def main() -> int:
         d3_url_override = os.environ.get("DINOV3_WEIGHTS_URL", "").strip()
         fallback_urls = [
             url_d3,
-            # Official model repository (if the .pth artifact is available to your account).
-            "https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m/resolve/main/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth?download=true",
             # Community mirrors with the same known SHA256.
+            "https://huggingface.co/jaychempan/dinov3/resolve/main/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth?download=true",
             "https://huggingface.co/REPA-E/iREPA-collections/resolve/ece5c3539c805644084db6fc299d190a8eab73d8/pretrained_models/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth?download=true",
             "https://huggingface.co/XavierJiezou/co2s-models/resolve/main/pretrained/dinov3_vitb16_pretrain_lvd1689m.pth?download=true",
         ]

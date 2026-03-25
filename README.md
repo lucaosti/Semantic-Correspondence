@@ -36,7 +36,7 @@ If you are setting up from scratch, start from the repository root. The bootstra
 
 From there you can work in two styles. **Ad hoc**: call `scripts/eval_baseline.py` for PCK, `scripts/train_finetune.py` for Task-style fine-tuning, or `scripts/train_lora.py` for parameter-efficient training, each with `--backbone` and the right weight flags. **Orchestrated**: `scripts/run_pipeline.py` is the single entry point. By default it runs the **full stack** (dataset check, fine-tune and LoRA for all three backbones, all PCK evaluation modes including window soft-argmax and trained checkpoints, metric export, `pytest`, and a Jupyter hint). Turn steps off in the configuration block if you need a shorter run. **SAM** weights are not in git: run `bash scripts/download_sam_vit_b.sh` once to save `checkpoints/sam_vit_b_01ec64.pth` (Meta’s official URL); the pipeline picks up that path automatically, or you can set `SAM_CHECKPOINT` / `export SAM_CHECKPOINT=...`. For tables and plots in Jupyter, install the notebook extra (`pip install -e ".[notebook]"`) and use `notebooks/verify_and_compare_results.ipynb`; it shares the same evaluation path as the CLI.
 
-Project rules—splits (`train` / `val` / `test`), no Hugging Face checkpoints for these backbones, window soft-argmax only at inference—are spelled out in **`docs/info.md`**. Italian working notes and layout expectations are in **`docs/claude.md`**. A literature-oriented overview lives in **`docs/stato-arte.md`**. **Full technical reference:** **`documentation.md`** (keep it updated when changing behavior or defaults). Those files are the canonical place for constraints; the root README stays a practical tour of the repo.
+Project rules—splits (`train` / `val` / `test`), **prefer official weights (HF mirrors allowed only as fallback)**, window soft-argmax only at inference—are spelled out in **`docs/info.md`**. Italian working notes and layout expectations are in **`docs/claude.md`**. A literature-oriented overview lives in **`docs/stato-arte.md`**. **Full technical reference:** **`documentation.md`** (keep it updated when changing behavior or defaults). Those files are the canonical place for constraints; the root README stays a practical tour of the repo.
 
 ### External notebook workflow
 
@@ -60,6 +60,20 @@ The YAML is split into:
 - `experiments`: the evaluation runs you want to compare, including baseline, WSA, fine-tuned checkpoints, and LoRA checkpoints.
 
 That keeps the notebook thin: the repository code handles path resolution, command construction, result export, and plotting.
+
+---
+
+### Google Colab (end-to-end)
+
+If you want to run this project inside **Google Colab** (instead of a local machine), use **`AML_Colab.ipynb`** at the repository root. It is self-contained and will:
+
+- clone the repository to `/content/Semantic-Correspondence`
+- download + extract **SPair-71k** to `data/SPair-71k/`
+- install the project (`pip install -e ".[notebook]"`)
+- download pretrained weights into `checkpoints/`
+- write `config.yaml` and run `scripts/run_pipeline.py --config config.yaml`
+
+For a local Linux + NVIDIA Jupyter workflow (repo + dataset already present), keep using **`AML.ipynb`**.
 
 ---
 
@@ -136,6 +150,10 @@ If you need a specific CUDA build of PyTorch, reinstall `torch` / `torchvision` 
 | `evaluation/` | PCK, baseline evaluation, `experiment_runner` (shared with scripts and notebook) |
 | `scripts/` | CLI tools and `run_pipeline.py` |
 | `docs/` | Guidelines (`info.md`), Italian notes (`claude.md`), literature (`stato-arte.md`) |
-| `notebooks/` | PCK comparison notebook |
+| `notebooks/` | PCK comparison notebook and notebook generators |
+| `AML.ipynb` | Local Linux + NVIDIA Jupyter notebook (generated) |
+| `AML_Colab.ipynb` | Google Colab end-to-end notebook (generated) |
 
 Large weights and run artifacts are not meant for git: use ignored paths such as `checkpoints/` and `runs/` (see `.gitignore`). Each `python scripts/run_pipeline.py` run writes a **timestamped log** under `runs/logs/pipeline_<UTC_datetime>.log` (every line prefixed with UTC date/time) and appends a row to `runs/logs/manifest.tsv` (start/end events and exit code).
+
+Pipeline metric exports are written under `runs/pipeline_exports/`: aggregate tables (`pck_results.json`, `pck_results.csv`) plus SD4Match-style granular outputs (`pck_results_per_image.json`, `pck_results_per_point.json`) and a flag-wise difficulty breakdown (`pck_results_by_difficulty_flag.json`) when the SD4Match metrics backend is enabled.

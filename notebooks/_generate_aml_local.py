@@ -47,7 +47,7 @@ cells.append(
     )
 )
 
-cells.append(cell_md(["### 1. Root del repository e controllo GPU"]))
+cells.append(cell_md(["### 1. Repository root and GPU check"]))
 
 cells.append(
     cell_code(
@@ -89,7 +89,7 @@ cells.append(
             "        pass",
             '    print("GPU:", torch.cuda.get_device_name(0))',
             '    print("CUDA runtime:", torch.version.cuda, "| PyTorch:", torch.__version__)',
-            '    print("NVIDIA: cudnn.benchmark=True, cuda:0 — allinea a device: cuda nel config.yaml")',
+            '    print("NVIDIA: cudnn.benchmark=True, cuda:0 — aligns with device: cuda in config.yaml")',
         ]
     )
 )
@@ -108,6 +108,7 @@ cells.append(
     cell_code(
         [
             "import os",
+            "import sys",
             "from pathlib import Path",
             "",
             "if 'find_repo_root' not in globals():",
@@ -160,7 +161,8 @@ cells.append(
             "os.chdir(REPO)",
             "sys.path.insert(0, REPO)",
             "",
-            '!python -m pip install -q -e ".[notebook]"',
+            "# Use sys.executable so the current Jupyter kernel environment is used",
+            '!{sys.executable} -m pip install -q -e ".[notebook]"',
             "",
             'os.environ["PYTHONPATH"] = REPO + os.pathsep + os.environ.get("PYTHONPATH", "")',
             'print("OK:", REPO)',
@@ -263,6 +265,7 @@ cells.append(
             '    d3 = f"{REPO}/checkpoints/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth"',
             '    sam = f"{REPO}/checkpoints/sam_vit_b_01ec64.pth"',
             "    cfg = {",
+            '        "dataset": {"backend": "sd4match", "metrics_backend": "sd4match"},',
             '        "paths": {',
             '            "repo_root": REPO,',
             '            "spair_root": f"{REPO}/data/SPair-71k",',
@@ -277,7 +280,7 @@ cells.append(
             '            "image_width": 784,',
             '            "limit_pairs": 100,',
             '            "eval_split": "val",',
-            '            "alphas": [0.05, 0.1, 0.15],',
+            '            "alphas": [0.05, 0.1, 0.2],',
             '            "wsa_window": 5,',
             '            "wsa_temperature": 1.0,',
             '            "log_batch_interval": 100,',
@@ -286,12 +289,12 @@ cells.append(
             '            "last_blocks": 2,',
             '            "epochs": 100,',
             '            "patience": 10,',
-            '            "batch_size": 5,',
+            '            "batch_size": 10,',
             '            "dinov2_weights": d2,',
             '            "dinov3_weights": d3,',
             '            "sam_checkpoint": sam,',
             "        },",
-            '        "lora": {"rank": 16, "epochs": 100, "patience": 3, "batch_size": 5},',
+            '        "lora": {"rank": 16, "epochs": 100, "patience": 3, "batch_size": 10},',
             '        "workflow_toggles": {},',
             "    }",
             "    _apply_run_mode_to_cfg(cfg)",
@@ -328,7 +331,7 @@ cells.append(
             "        if not ok:",
             "            missing.append((label, p))",
             "    if missing:",
-            "        raise RuntimeError(f'Pesi mancanti dopo download: {missing}')",
+            '        raise RuntimeError(f"Missing weights after download: {missing}")',
             "",
             "    cfg = _build_fresh_config_dict()",
             "    with open(cfg_path, 'w', encoding='utf-8') as f:",
@@ -377,7 +380,7 @@ cells.append(
             "else:",
             '    os.environ.pop("SEMANTIC_CORRESPONDENCE_PIPELINE_RESET", None)',
             "",
-            "!python scripts/run_pipeline.py --config config.yaml",
+            "!{sys.executable} scripts/run_pipeline.py --config config.yaml",
         ]
     )
 )

@@ -1138,6 +1138,7 @@ class SPair71kPairDataset(Dataset):
 
         sample: Dict[str, Any] = {
             "pair_id_str": rec["pair_id"],
+            "category": rec["category"],
             "category_id": torch.tensor([self._categories.index(rec["category"])], dtype=torch.int64),
             "src_img": self._to_model_tensor(src_p2),
             "tgt_img": self._to_model_tensor(tgt_p2),
@@ -1180,7 +1181,7 @@ def spair_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     keys = batch[0].keys()
     for k in keys:
-        if k == "pair_id_str":
+        if k in ("pair_id_str", "category"):
             out[k] = [b[k] for b in batch]
             continue
         vals = [b[k] for b in batch]

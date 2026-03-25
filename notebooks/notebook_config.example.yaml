@@ -11,7 +11,7 @@ runtime:
   image_height: 784
   image_width: 784
   limit_pairs: 0
-  alphas: [0.05, 0.1, 0.15]
+  alphas: [0.05, 0.1, 0.2]
   sample_split: val
   sample_index: 0
   wsa_window: 5
@@ -25,7 +25,7 @@ finetune:
   patience: 5
   learning_rate: 5.0e-05
   weight_decay: 0.01
-  batch_size: 5
+  batch_size: 100
   num_workers: -1
   log_batch_interval: 2500
   resume_save_interval: 2500
@@ -44,7 +44,7 @@ lora:
   patience: 3
   learning_rate: 1.0e-03
   weight_decay: 0.0
-  batch_size: 5
+  batch_size: 100
   num_workers: -1
   log_batch_interval: 2500
   resume_save_interval: 2500
