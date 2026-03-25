@@ -5,6 +5,10 @@ LoRA fine-tuning on SPair-71k (Task 4, parameter-efficient adaptation).
 Only LoRA parameters on the last blocks' MLP linear layers are optimized by default
 (see :func:`models.common.lora.apply_lora_to_last_blocks_mlp`).
 
+When this training runs via the orchestrated pipeline (`scripts/run_pipeline.py`), the
+pipeline passes explicit ``--epochs`` / ``--patience`` values, overriding this script's
+standalone defaults (see `documentation.md`, §8.2).
+
 **Splits:** train on ``train``, early-stop / monitor on ``val``, report on ``test`` via ``scripts/eval_baseline.py``.
 """
 

@@ -5,6 +5,10 @@ Fine-tune the last transformer blocks on SPair-71k (Task 2).
 This script is intentionally minimal: it wires the dataset, backbone, optimizer, Gaussian CE
 loss, and early stopping. You still need official backbones on ``PYTHONPATH``.
 
+When this training runs via the orchestrated pipeline (`scripts/run_pipeline.py`), the
+pipeline passes explicit ``--epochs`` / ``--patience`` values, overriding this script's
+standalone defaults (see `documentation.md`, §8.2).
+
 **Splits:** train on ``train`` (``trn.txt``), select hyperparameters / early-stop on ``val``,
 report on ``test`` (run a separate eval script).
 """
