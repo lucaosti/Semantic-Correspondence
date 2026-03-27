@@ -284,6 +284,7 @@ cells.append(
             '            "wsa_window": 5,',
             '            "wsa_temperature": 1.0,',
             '            "log_batch_interval": 100,',
+            '            "resume_save_interval": 100,',
             "        },",
             '        "finetune": {',
             '            "last_blocks": 2,',

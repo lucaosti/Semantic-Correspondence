@@ -28,7 +28,7 @@ finetune:
   batch_size: 100
   num_workers: -1
   log_batch_interval: 2500
-  resume_save_interval: 2500
+  resume_save_interval: 100
   resume: null
   dinov2_weights: null
   dinov3_weights: null
@@ -47,7 +47,7 @@ lora:
   batch_size: 100
   num_workers: -1
   log_batch_interval: 2500
-  resume_save_interval: 2500
+  resume_save_interval: 100
   resume: null
   dinov2_weights: null
   dinov3_weights: null

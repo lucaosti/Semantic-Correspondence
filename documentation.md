@@ -150,7 +150,8 @@ Injected on late MLP linears (`models/common/lora.py` + backbone-specific hooks)
 ### 6.6 Early stopping and resume
 
 - **Early stopping:** `training/early_stopping.py` on **validation loss** each epoch (`patience` configurable).
-- **Resume files:** `checkpoints/<backbone>_lastblocks*_resume.pt` / LoRA equivalents store model, optimizer, epoch, stopper state, and optional `batch_in_epoch` for mid-epoch resume.
+- **Resume files:** `checkpoints/<backbone>_lastblocks*_resume.pt` / LoRA equivalents store model, optimizer, epoch, stopper state, and optional `batch_in_epoch` for mid-epoch resume. Mid-epoch resume is only as granular as the save cadence: training scripts write these files every `--resume-save-interval` batches (recommend **100** on preemptible runtimes like Colab).
+- **Two-level resume:** (1) pipeline stage skip via `runs/pipeline_state.json` (`PIPELINE_RESUME=True`), and (2) training resume via `checkpoints/*_resume.pt` (`--resume ...` + periodic saves). If you see training restart from batch 0 after an interruption, it usually means no recent `*_resume.pt` was written (save interval too large) or `checkpoints/` was not persisted.
 
 ---
 

@@ -132,7 +132,7 @@ bash scripts/reconnect_dashboard.sh
 # Full restart (clear resume bookkeeping; keeps weight checkpoints): SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1 bash scripts/start_pipeline_detached.sh
 ```
 
-**Resume:** `runs/pipeline_state.json` records finished stages; `runs/logs/stage_events.jsonl` logs `start` / `done` / `skip` / `fail` per stage. Training uses `checkpoints/*_resume.pt` for epoch-level resume when the pipeline is interrupted mid-training.
+**Resume:** `runs/pipeline_state.json` records finished stages; `runs/logs/stage_events.jsonl` logs `start` / `done` / `skip` / `fail` per stage. Training uses `checkpoints/*_resume.pt` for mid-training resume when the pipeline is interrupted; to avoid losing too much progress on preemptible runtimes (e.g. Colab), use a smaller `--resume-save-interval` (recommend **100**) and ensure `checkpoints/` is persisted (Drive symlink in `AML_Colab.ipynb`).
 
 If you need a specific CUDA build of PyTorch, reinstall `torch` / `torchvision` after bootstrap using the [official installer](https://pytorch.org/get-started/locally/); see also comments in `requirements.txt`.
 

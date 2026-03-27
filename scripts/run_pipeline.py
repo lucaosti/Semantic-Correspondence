@@ -30,7 +30,7 @@ and sets ``runs/logs/current.log`` (symlink) to that file. Subprocess output is 
 
 Structured stage traces append to ``runs/logs/stage_events.jsonl`` (one JSON object per line: ``action``, ``stage_id``, ``ts_utc``, …).
 
-**Resume / interrupt:** Set ``PIPELINE_RESUME = True`` (default) to skip stages already recorded in ``runs/pipeline_state.json`` and to pass ``--resume`` into training when a ``*_resume.pt`` file exists (optimizer + model state). Training scripts also write that file **during** an epoch every ``--resume-save-interval`` batches (default 2500), not only after validation, so long single epochs are not lost on kill. Changing training/eval hyperparameters changes a **config fingerprint**; a mismatch clears remembered progress so runs are not mixed. For a deliberate full restart without deleting checkpoints, run with env ``SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1``.
+**Resume / interrupt:** Set ``PIPELINE_RESUME = True`` (default) to skip stages already recorded in ``runs/pipeline_state.json`` and to pass ``--resume`` into training when a ``*_resume.pt`` file exists (optimizer + model state). Training scripts also write that file **during** an epoch every ``--resume-save-interval`` batches (default 100), not only after validation, so long single epochs are not lost on kill. Changing training/eval hyperparameters changes a **config fingerprint**; a mismatch clears remembered progress so runs are not mixed. For a deliberate full restart without deleting checkpoints, run with env ``SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1``.
 
 **Epochs** are set by ``FT_EPOCHS`` / ``LORA_EPOCHS`` (and ``FT_PATIENCE`` / ``LORA_PATIENCE`` for early stopping) in the SHARED CONFIG block below. Training scripts also print ``epoch k/total``, periodic batch indices, and ``train_loss`` / ``val_loss`` per epoch.
 
@@ -119,6 +119,9 @@ FT_EPOCHS: int = 200
 FT_PATIENCE: int = 10
 LORA_EPOCHS: int = 200
 LORA_PATIENCE: int = 10
+# Save training resume files every N batches within an epoch.
+# Lower values improve resumability on preemptible runtimes (e.g., Colab).
+RESUME_SAVE_INTERVAL: int = 100
 # Training scripts print batch progress every N steps (0 = epoch summaries only).
 # Lower on CPU-only hosts so logs/dashboard move often (each step is slow).
 LOG_BATCH_INTERVAL: int = 100
@@ -212,6 +215,8 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["WSA_TEMPERATURE"] = float(runtime["wsa_temperature"])
         if runtime.get("log_batch_interval") is not None:
             g["LOG_BATCH_INTERVAL"] = int(runtime["log_batch_interval"])
+        if runtime.get("resume_save_interval") is not None:
+            g["RESUME_SAVE_INTERVAL"] = int(runtime["resume_save_interval"])
         if runtime.get("eval_split") is not None:
             g["EVAL_SPLIT"] = str(runtime["eval_split"])
 
@@ -285,6 +290,7 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "FT_PATIENCE": FT_PATIENCE,
         "LORA_EPOCHS": LORA_EPOCHS,
         "LORA_PATIENCE": LORA_PATIENCE,
+        "RESUME_SAVE_INTERVAL": RESUME_SAVE_INTERVAL,
         "PREPROCESS": PREPROCESS,
         "IMAGE_HEIGHT": IMAGE_HEIGHT,
         "IMAGE_WIDTH": IMAGE_WIDTH,
@@ -780,6 +786,8 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             CHECKPOINT_DIR,
             "--device",
             eff_device,
+            "--resume-save-interval",
+            str(RESUME_SAVE_INTERVAL),
         ]
     )
     if DINOV2_WEIGHTS:
