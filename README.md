@@ -36,7 +36,7 @@ If you are setting up from scratch, start from the repository root. The bootstra
 
 From there you can work in two styles. **Ad hoc**: call `scripts/eval_baseline.py` for PCK, `scripts/train_finetune.py` for Task-style fine-tuning, or `scripts/train_lora.py` for parameter-efficient training, each with `--backbone` and the right weight flags. **Orchestrated**: `scripts/run_pipeline.py` is the single entry point. By default it runs the **full stack** (dataset check, fine-tune and LoRA for all three backbones, all PCK evaluation modes including window soft-argmax and trained checkpoints, metric export, `pytest`, and a Jupyter hint). Turn steps off in the configuration block if you need a shorter run. **SAM** weights are not in git: run `bash scripts/download_sam_vit_b.sh` once to save `checkpoints/sam_vit_b_01ec64.pth` (Meta’s official URL); the pipeline picks up that path automatically, or you can set `SAM_CHECKPOINT` / `export SAM_CHECKPOINT=...`. For tables and plots in Jupyter, install the notebook extra (`pip install -e ".[notebook]"`) and use `notebooks/verify_and_compare_results.ipynb`; it shares the same evaluation path as the CLI.
 
-Project rules—splits (`train` / `val` / `test`), **prefer official weights (HF mirrors allowed only as fallback)**, window soft-argmax only at inference—are spelled out in **`docs/info.md`**. Italian working notes and layout expectations are in **`docs/claude.md`**. A literature-oriented overview lives in **`docs/stato-arte.md`**. **Full technical reference:** **`documentation.md`** (keep it updated when changing behavior or defaults). Those files are the canonical place for constraints; the root README stays a practical tour of the repo.
+Project rules—splits (`train` / `val` / `test`), **prefer official weights (HF mirrors allowed only as fallback)**, window soft-argmax only at inference—are spelled out in **`docs/info.md`**. A literature-oriented overview lives in **`docs/stato-arte.md`**. **Full technical reference:** **`documentation.md`** (keep it updated when changing behavior or defaults). Those files are the canonical place for constraints; the root README stays a practical tour of the repo.
 
 ### External notebook workflow
 
@@ -149,7 +149,7 @@ If you need a specific CUDA build of PyTorch, reinstall `torch` / `torchvision` 
 | `training/` | Losses, training loop helpers, unfreeze utilities |
 | `evaluation/` | PCK, baseline evaluation, `experiment_runner` (shared with scripts and notebook) |
 | `scripts/` | CLI tools and `run_pipeline.py` |
-| `docs/` | Guidelines (`info.md`), Italian notes (`claude.md`), literature (`stato-arte.md`) |
+| `docs/` | Guidelines (`info.md`), literature (`stato-arte.md`) |
 | `notebooks/` | PCK comparison notebook and notebook generators |
 | `AML.ipynb` | Local Linux + NVIDIA Jupyter notebook (generated) |
 | `AML_Colab.ipynb` | Google Colab end-to-end notebook (generated) |

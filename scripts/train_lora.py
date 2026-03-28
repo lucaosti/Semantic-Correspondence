@@ -100,7 +100,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--resume-save-interval",
         type=int,
-        default=2500,
+        default=100,
         help="Save *_resume.pt every N training batches within an epoch (0 = only at end of each epoch).",
     )
     return p.parse_args()
@@ -301,7 +301,7 @@ def main() -> int:
             n_batches += 1
             done_in_epoch = batch_idx + 1
             iv = args.resume_save_interval
-            if iv > 0 and done_in_epoch % iv == 0 and done_in_epoch < n_train_batches:
+            if iv > 0 and (done_in_epoch % iv == 0 or done_in_epoch == n_train_batches):
                 _save_resume_atomic(
                     resume_path,
                     {
@@ -321,6 +321,10 @@ def main() -> int:
                         },
                         "lora": lora_meta,
                     },
+                )
+                print(
+                    f"train_lora: saved resume checkpoint (batch_in_epoch={done_in_epoch}/{n_train_batches}) -> {resume_path}",
+                    flush=True,
                 )
         train_loss = total / max(n_batches, 1)
 

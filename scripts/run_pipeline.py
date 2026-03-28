@@ -10,8 +10,9 @@ the repository root with the venv active and ``pip install -e .``:
    python scripts/run_pipeline.py
    python scripts/run_pipeline.py --config config.yaml
 
-The optional ``--config`` flag loads a YAML file (same structure as the Colab ``AML.ipynb`` notebook)
-and overrides the in-script defaults without editing this file.
+The optional ``--config`` flag loads a YAML file (same shape as notebook-written ``config.yaml``:
+see ``AML_Colab.ipynb`` / ``AML.ipynb`` generators) and overrides the in-script defaults without
+editing this file.
 
 Order of execution: dataset verification (optional) → fine-tune (per backbone flag) → LoRA (per
 flag) → PCK evaluation and optional exports → optional pytest → optional notebook hint.

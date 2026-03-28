@@ -4,8 +4,8 @@ Download official pretrained weights for DINOv2 ViT-B/14, DINOv3 ViT-B/16, and S
 into ``checkpoints/``.
 
 URLs match ``models/dinov2/hub_loader.py`` and ``models/dinov3/hub_loader.py`` (same as
-``torch.hub.load_state_dict_from_url`` used during training). SAM uses
-``scripts/download_sam_vit_b.sh``.
+``torch.hub.load_state_dict_from_url`` used during training). SAM weights are downloaded
+via HTTP from ``dl.fbaipublicfiles.com`` with Hugging Face mirrors as fallbacks.
 
 Usage (from repository root)::
 
@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import subprocess
 import sys
 import tempfile
 import urllib.request

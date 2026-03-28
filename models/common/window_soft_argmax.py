@@ -40,7 +40,7 @@ def window_soft_argmax_xy(
     window_size:
         Odd side length (e.g., ``5`` or ``7``); if even, it is bumped up by one.
     temperature:
-        Softmax temperature on the window logits (higher = sharper).
+        Softmax temperature on the window logits (lower = sharper, higher = softer).
 
     Returns
     -------

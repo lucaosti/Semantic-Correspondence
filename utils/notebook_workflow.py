@@ -199,8 +199,23 @@ def _dataclass_to_plain_dict(obj: Any) -> Any:
     return obj
 
 
+def _kwargs_for_dataclass(cls: type, data: Any) -> dict[str, Any]:
+    """Drop keys unknown to ``cls`` so pipeline-style YAML (e.g. Colab ``config.yaml``) can load."""
+    if not isinstance(data, dict):
+        return {}
+    fields = getattr(cls, "__dataclass_fields__", None)
+    if not fields:
+        return dict(data)
+    return {k: v for k, v in data.items() if k in fields}
+
+
 def load_workflow_config(path: str | os.PathLike[str]) -> NotebookWorkflowConfig:
-    """Load a workflow config from YAML or JSON."""
+    """Load a workflow config from YAML or JSON.
+
+    Unknown keys under ``paths`` / ``runtime`` / ``finetune`` / ``lora`` are ignored so YAML
+    also used with ``python scripts/run_pipeline.py --config`` (extra ``eval_split``,
+    ``resume_save_interval``, ``dataset``, ``workflow_toggles``, …) still loads here.
+    """
     p = Path(path).expanduser().resolve()
     with open(p, "r", encoding="utf-8") as f:
         text = f.read()
@@ -213,10 +228,10 @@ def load_workflow_config(path: str | os.PathLike[str]) -> NotebookWorkflowConfig
     if not isinstance(raw, dict):
         raise TypeError(f"Expected a mapping in {p}, got {type(raw).__name__}")
 
-    paths = PathsConfig(**raw.get("paths", {}))
-    runtime = RuntimeConfig(**raw.get("runtime", {}))
-    finetune = TrainingJobConfig(**raw.get("finetune", {}))
-    lora = TrainingJobConfig(**raw.get("lora", {}))
+    paths = PathsConfig(**_kwargs_for_dataclass(PathsConfig, raw.get("paths") or {}))
+    runtime = RuntimeConfig(**_kwargs_for_dataclass(RuntimeConfig, raw.get("runtime") or {}))
+    finetune = TrainingJobConfig(**_kwargs_for_dataclass(TrainingJobConfig, raw.get("finetune") or {}))
+    lora = TrainingJobConfig(**_kwargs_for_dataclass(TrainingJobConfig, raw.get("lora") or {}))
     experiments = tuple(dict(item) for item in raw.get("experiments", []))
     device_override = raw.get("device_override")
     return NotebookWorkflowConfig(

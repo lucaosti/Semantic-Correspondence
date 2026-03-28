@@ -3,7 +3,9 @@
 Generator for AML_Colab.ipynb (Google Colab, end-to-end).
 
 This notebook is designed to run inside Colab and will:
+- optionally clean old paths under /content
 - clone the repo into /content/Semantic-Correspondence
+- mount Google Drive and symlink runs/ + checkpoints/ for persistence
 - download + extract SPair-71k into data/SPair-71k
 - install the project (editable) with notebook extras
 - download pretrained weights into checkpoints/
@@ -51,35 +53,112 @@ cells.append(
             "",
             "This notebook runs **end-to-end on Google Colab**:",
             "",
-            "1. clone the repository",
-            "2. download + extract **SPair-71k** to `data/SPair-71k/`",
-            "3. install the project (`pip install -e \".[notebook]\"`)",
-            "4. download pretrained weights to `checkpoints/`",
-            "5. write `config.yaml` and run `scripts/run_pipeline.py --config config.yaml`",
+            "1. clone the repository (after optional cleanup of `/content`)",
+            "2. mount **Google Drive** and symlink `runs/` + `checkpoints/` so partial saves survive disconnects",
+            "3. download + extract **SPair-71k** to `data/SPair-71k/`",
+            "4. install the project (`pip install -e \".[notebook]\"`)",
+            "5. download pretrained weights to `checkpoints/`",
+            "6. write `config.yaml` and run `scripts/run_pipeline.py --config config.yaml`",
             "",
-            "**Artifacts** (logs, state, exports, checkpoints, weights) are stored under `runs/` and `checkpoints/` in the repo root.",
+            "**Artifacts** (logs, state, exports, checkpoints, weights) are stored under `runs/` and `checkpoints/`.",
+            "",
+            "On Colab, `/content` is ephemeral: use the **Google Drive** cell below to symlink `runs/` and `checkpoints/` to Drive so resume and partial checkpoints survive restarts.",
         ]
     )
 )
 
-cells.append(cell_md(["### 1. GPU check (Colab runtime)"]))
+cells.append(
+    cell_md(
+        [
+            "### 1. Runtime + CUDA sanity checks",
+            "",
+            "Select a **GPU** runtime: Runtime → Change runtime type → Hardware accelerator → GPU.",
+        ]
+    )
+)
 cells.append(
     cell_code(
         [
+            "import sys",
+            "import subprocess",
+            "",
+            "result = subprocess.run(",
+            "    [",
+            "        sys.executable,",
+            "        '-c',",
+            "        \"import torch;\\nprint(torch.__version__);\\nprint('cuda_available=', torch.cuda.is_available());\\nprint('torch_cuda=', torch.version.cuda)\",",
+            "    ],",
+            "    capture_output=True,",
+            "    text=True,",
+            ")",
+            "print(result.stdout)",
+            "",
+            "need_reinstall = ('cuda_available= False' in result.stdout) and ('torch_cuda= None' in result.stdout)",
+            "",
+            "if need_reinstall:",
+            "    print('Reinstalling CUDA-enabled torch/torchvision...')",
+            "    subprocess.run(",
+            "        [",
+            "            sys.executable,",
+            "            '-m',",
+            "            'pip',",
+            "            'install',",
+            "            '-q',",
+            "            '--upgrade',",
+            "            '--force-reinstall',",
+            "            'torch',",
+            "            'torchvision',",
+            "            '--index-url',",
+            "            'https://download.pytorch.org/whl/cu121',",
+            "        ],",
+            "        check=True,",
+            "    )",
+            "",
             "import torch",
             "",
             "print('torch', torch.__version__)",
             "print('cuda_available=', torch.cuda.is_available())",
+            "print('torch_cuda=', torch.version.cuda)",
             "if torch.cuda.is_available():",
             "    print('gpu=', torch.cuda.get_device_name(0))",
-            "    print('cuda_runtime=', torch.version.cuda)",
-            "else:",
-            "    print('WARNING: CUDA not available. In Colab: Runtime → Change runtime type → GPU.')",
         ]
     )
 )
 
-cells.append(cell_md(["### 2. Clone repository"]))
+cells.append(
+    cell_md(
+        [
+            "### 2. (Optional) Cleanup old Colab workspace",
+            "",
+            "If you rerun the notebook, you may have an old repo under `/content`. This step removes it from **ephemeral** storage only (nothing on Google Drive is deleted).",
+        ]
+    )
+)
+cells.append(
+    cell_code(
+        [
+            "import shutil",
+            "from pathlib import Path",
+            "",
+            "FORCE_CLEAN = True",
+            "",
+            "paths_to_remove = [",
+            "    Path('/content/Semantic-Correspondence'),",
+            "    Path('/content/sample_data'),",
+            "]",
+            "",
+            "if FORCE_CLEAN:",
+            "    for p in paths_to_remove:",
+            "        if p.exists():",
+            "            print('Removing:', p)",
+            "            shutil.rmtree(p, ignore_errors=True)",
+            "else:",
+            "    print('FORCE_CLEAN=False: skipping cleanup')",
+        ]
+    )
+)
+
+cells.append(cell_md(["### 3. Clone repository"]))
 cells.append(
     cell_code(
         [
@@ -98,7 +177,53 @@ cells.append(
     )
 )
 
-cells.append(cell_md(["### 3. Download + extract SPair-71k"]))
+cells.append(
+    cell_md(
+        [
+            "### 4. (Recommended) Persist `runs/` and `checkpoints/` on Google Drive",
+            "",
+            "Colab storage under `/content` is lost when the runtime disconnects. To **resume training** and keep partial `*_resume.pt` saves (every 100 training batches), store artifacts on Drive, e.g.:",
+            "",
+            "- `MyDrive/Colab Notebooks/AML_results/runs`",
+            "- `MyDrive/Colab Notebooks/AML_results/checkpoints`",
+            "",
+            "Run the **next** cell after cloning. It creates symlinks `Semantic-Correspondence/runs` and `.../checkpoints` pointing at those folders. The **config** cell later sets `paths.checkpoint_dir` to the **same** Drive folder so the pipeline writes resume files there even if a symlink were wrong.",
+        ]
+    )
+)
+cells.append(
+    cell_code(
+        [
+            "import os",
+            "import shutil",
+            "from pathlib import Path",
+            "",
+            "from google.colab import drive",
+            "",
+            "drive.mount('/content/drive', force_remount=False)",
+            "",
+            "REPO_DIR = Path('/content/Semantic-Correspondence')",
+            "BASE_DIR = Path('/content/drive/MyDrive/Colab Notebooks/AML_results')",
+            "RUNS_DIR = BASE_DIR / 'runs'",
+            "CKPT_DIR = BASE_DIR / 'checkpoints'",
+            "",
+            "RUNS_DIR.mkdir(parents=True, exist_ok=True)",
+            "CKPT_DIR.mkdir(parents=True, exist_ok=True)",
+            "",
+            "os.chdir(REPO_DIR)",
+            "for link_name, target in [('runs', RUNS_DIR), ('checkpoints', CKPT_DIR)]:",
+            "    p = REPO_DIR / link_name",
+            "    if p.is_symlink() or p.is_file():",
+            "        p.unlink()",
+            "    elif p.is_dir():",
+            "        shutil.rmtree(p)",
+            "    os.symlink(str(target), str(p))",
+            "    print(f'Linked {p} -> {target}')",
+        ]
+    )
+)
+
+cells.append(cell_md(["### 5. Download + extract SPair-71k"]))
 cells.append(
     cell_code(
         [
@@ -134,7 +259,7 @@ cells.append(
     )
 )
 
-cells.append(cell_md(["### 4. Install project (editable + notebook extras)"]))
+cells.append(cell_md(["### 6. Install project (editable + notebook extras)"]))
 cells.append(
     cell_code(
         [
@@ -153,7 +278,7 @@ cells.append(
     )
 )
 
-cells.append(cell_md(["### 5. Download pretrained weights (DINOv2, DINOv3, SAM)"]))
+cells.append(cell_md(["### 7. Download pretrained weights (DINOv2, DINOv3, SAM)"]))
 cells.append(
     cell_code(
         [
@@ -169,7 +294,7 @@ cells.append(
     )
 )
 
-cells.append(cell_md(["### 6. Write config.yaml (Colab defaults)"]))
+cells.append(cell_md(["### 8. Write config.yaml (Colab defaults)"]))
 cells.append(
     cell_code(
         [
@@ -182,6 +307,10 @@ cells.append(
             "REPO_DIR = Path('/content/Semantic-Correspondence')",
             "os.chdir(REPO_DIR)",
             "",
+            "# Same base as the Drive cell (partial checkpoints + resume must land here).",
+            "DRIVE_AML_BASE = Path('/content/drive/MyDrive/Colab Notebooks/AML_results')",
+            "CHECKPOINT_DIR_ON_DRIVE = str(DRIVE_AML_BASE / 'checkpoints')",
+            "",
             "cfg_path = REPO_DIR / 'config.yaml'",
             "",
             "cfg = {",
@@ -192,7 +321,7 @@ cells.append(
             "    'paths': {",
             "        'repo_root': str(REPO_DIR),",
             "        'spair_root': str(REPO_DIR / 'data' / 'SPair-71k'),",
-            "        'checkpoint_dir': 'checkpoints',",
+            "        'checkpoint_dir': CHECKPOINT_DIR_ON_DRIVE,",
             "        'output_dir': str(REPO_DIR / 'runs' / 'notebook_exports'),",
             "    },",
             "    'runtime': {",
@@ -219,19 +348,19 @@ cells.append(
             "        'sam_checkpoint': str(REPO_DIR / 'checkpoints' / 'sam_vit_b_01ec64.pth'),",
             "    },",
             "    'lora': {",
-            "        'rank': 16,",
+            "        'rank': 8,",
             "        'epochs': 100,",
-            "        'patience': 3,",
+            "        'patience': 10,",
             "        'batch_size': 10,",
             "    },",
             "    'workflow_toggles': {",
             "        'run_verify_dataset': True,",
             "        'train_finetune': [True, True, True],",
-            "        'train_lora': [False, False, False],",
+            "        'train_lora': [True, True, True],",
             "        'run_eval_baseline': [True, True, True],",
-            "        'run_eval_baseline_wsa': [False, False, False],",
+            "        'run_eval_baseline_wsa': [True, True, True],",
             "        'run_eval_finetuned_checkpoint': [True, True, True],",
-            "        'run_eval_lora_checkpoint': [False, False, False],",
+            "        'run_eval_lora_checkpoint': [True, True, True],",
             "        'run_export_metrics_tables': True,",
             "        'run_pytest': False,",
             "        'print_jupyter_notebook_hint': True,",
@@ -242,11 +371,12 @@ cells.append(
             "with open(cfg_path, 'w', encoding='utf-8') as f:",
             "    yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True, default_flow_style=False)",
             "print('Written:', cfg_path)",
+            "print('checkpoint_dir (resume every', cfg['runtime']['resume_save_interval'], 'batches):', cfg['paths']['checkpoint_dir'])",
         ]
     )
 )
 
-cells.append(cell_md(["### 7. Run pipeline"]))
+cells.append(cell_md(["### 9. Run pipeline"]))
 cells.append(
     cell_code(
         [

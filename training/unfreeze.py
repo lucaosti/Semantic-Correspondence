@@ -4,7 +4,7 @@ Selective freezing / unfreezing of ViT backbones (Task 2: last layers only).
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import Iterable
 
 import torch.nn as nn
 
@@ -67,7 +67,7 @@ def collect_trainable_parameter_groups(
     backbone_lr_multiplier: float = 1.0,
 ) -> list[dict]:
     """
-    Build parameter groups for optimizers (e.g., lower LR for backbone, higher for heads).
+    Build a single optimizer parameter group from all trainable parameters.
 
     Parameters
     ----------
@@ -76,8 +76,8 @@ def collect_trainable_parameter_groups(
     base_lr:
         Learning rate for parameters with ``requires_grad=True``.
     backbone_lr_multiplier:
-        Multiplier applied to ``base_lr`` for all trainable tensors (simple baseline; extend
-        for separate groups as needed).
+        Multiplier applied to ``base_lr`` (extend to multiple groups if separate
+        backbone / head LRs are needed).
 
     Returns
     -------
