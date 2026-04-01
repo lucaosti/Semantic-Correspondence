@@ -72,8 +72,8 @@ checkpoints/
 # Notebook-generated pipeline config (machine-specific absolute paths)
 config.yaml
 
-# Local papers under docs/ (PDFs stay private; Markdown guidelines are tracked)
-docs/**/*.pdf
+# Local papers under docs/ (PDFs stay private; Markdown also ignored)
+docs/
 
 # Local / secrets (do not commit)
 .env

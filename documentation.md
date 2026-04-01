@@ -40,11 +40,11 @@ Weights are **not** committed to git. Use `scripts/download_pretrained_weights.p
 | `models/common/` | Matching, coords, LoRA, window soft-argmax, `vit_intermediate`, input norm |
 | `models/dinov2/`, `dinov3/`, `sam/` | Backbone implementations; weight loading in `hub_loader.py` / `backbone.py` |
 | `training/` | `losses.py`, `engine.py` (batched Gaussian losses), `unfreeze.py`, `early_stopping.py`, `config.py` |
-| `evaluation/` | `pck.py`, `baseline_eval.py`, `experiment_runner.py`, checkpoint helpers |
+| `evaluation/` | `pck.py`, `baseline_eval.py`, `experiment_runner.py`, `visualize.py` (keypoint visualization), checkpoint helpers |
 | `utils/` | `hardware.py`, `pipeline_state.py`, `notebook_workflow.py`, `paths.py` |
 | `scripts/` | CLIs and `run_pipeline.py` (see §8) |
-| `docs/` | `info.md` (rules), `stato-arte.md` (references). Only `docs/**/*.pdf` is gitignored under `docs/`; `*.md` files are tracked. |
-| `notebooks/` | `verify_and_compare_results.ipynb`, `notebook_config.example.yaml`, `_generate_aml_local.py`, `_generate_aml_colab.py`; root `AML.ipynb` / `AML_Colab.ipynb` (generated) |
+| `docs/` | `info.md` (rules), `references.md` (references). Only `docs/**/*.pdf` is gitignored under `docs/`; `*.md` files are tracked. |
+| `notebooks/` | `notebook_config.example.yaml`, `_generate_aml_local.py`, `_generate_aml_colab.py`; root `AML.ipynb` / `AML_Colab.ipynb` (generated) |
 | `runs/`, `checkpoints/` | Gitignored artifacts: logs, exports, downloaded weights, training checkpoints |
 
 **Root:** `README.md`, `requirements.txt`, `pyproject.toml`, `documentation.md`.
@@ -130,18 +130,22 @@ This is **not** multi-keypoint batching inside a single similarity matrix; it is
 
 ### 6.3 Batch size defaults
 
-| Location | Default |
-|----------|---------|
-| `train_finetune.py` / `train_lora.py` | `--batch-size` **100** |
-| `run_pipeline.py` | `TRAIN_BATCH_SIZE` **100** |
-| `training/config.py` dataclasses | **100** |
-| `utils/notebook_workflow.py` / `notebooks/notebook_config.example.yaml` | **100** |
+Fine-tuning and LoRA have **separate** batch size controls to avoid silent overwrites.
 
-Reduce **batch size** if you hit **OOM** (especially **SAM** at 1024×1024). **Evaluation** (`baseline_eval.py`, `eval_baseline.py`, `experiment_runner`) uses **batch size 1** for the PCK loop (`evaluate_spair_loader` contract).
+| Location | Fine-tune default | LoRA default |
+|----------|-------------------|--------------|
+| `train_finetune.py` / `train_lora.py` | `--batch-size` **100** | `--batch-size` **100** |
+| `run_pipeline.py` | `FT_BATCH_SIZE` **100** | `LORA_BATCH_SIZE` **100** |
+| `training/config.py` dataclasses | **100** | **100** |
+| Colab config (`AML_Colab.ipynb`) | **10** | **10** |
 
-### 6.4 Fine-tuning (last blocks)
+Colab uses lower batch sizes due to T4 VRAM constraints. Reduce further if you hit OOM (especially SAM at 1024×1024). **Evaluation** uses **batch size 1** for the PCK loop.
+
+### 6.4 Fine-tuning (last blocks) — multi-block sweep
 
 `unfreeze_last_transformer_blocks(model, n_blocks=N)` (`training/unfreeze.py`): after `freeze_all`, only the last **N** modules in `model.blocks` are trainable. Optimizer sees only `requires_grad=True` parameters.
+
+**PDF Stage 2 requirement:** the pipeline sweeps over `LAST_BLOCKS_LIST` (default `[1, 2, 4]`), training a separate checkpoint for each block count per backbone. This produces checkpoints named `<backbone>_lastblocks<N>_best.pt` and generates evaluation specs for each. The multi-block sweep allows comparing how fine-tuning depth affects correspondence quality.
 
 ### 6.5 LoRA
 
@@ -165,11 +169,16 @@ where **`pck_threshold`** is the **bounding-box scale** (max side length) in the
 
 Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in `run_pipeline.py`, aligned with the course PDF). **`EVAL_LIMIT > 0`** truncates pairs for debugging.
 
-`experiment_runner.py` schedules multiple **eval specs** (baseline, WSA, checkpoints); each run uses the shared baseline evaluator with **batch size 1** data loading unless changed in code.
+`experiment_runner.py` schedules multiple **eval specs** (baseline, baseline+WSA, fine-tuned per block count, fine-tuned+WSA, LoRA, LoRA+WSA); each run uses the shared baseline evaluator with **batch size 1** data loading.
 
-**Reporting granularity (PDF requirement):** when the SD4Match metrics backend is enabled, the pipeline exports both **per-image** and **per-point** PCK results under `runs/pipeline_exports/` as `pck_results_per_image.json` and `pck_results_per_point.json`, alongside the aggregate `pck_results.json` / `pck_results.csv`.
+**WSA on trained models (PDF Stage 3):** the pipeline generates WSA variants for fine-tuned and LoRA checkpoints when `RUN_EVAL_FINETUNED_WSA` / `RUN_EVAL_LORA_WSA` are enabled. This measures the benefit of sub-pixel refinement on top of adapted features.
 
-**Difficulty levels (PDF requirement):** the pipeline also exports a flag-wise breakdown by SPair-71k difficulty indicators (0 vs 1 for each of `viewpoint_variation`, `scale_variation`, `truncation`, `occlusion`) as `pck_results_by_difficulty_flag.json` under `runs/pipeline_exports/`.
+**Reporting granularity (PDF requirement):** when the SD4Match metrics backend is enabled, the pipeline exports:
+- **Aggregate:** `pck_results.json`, `pck_results.csv`
+- **Per-image:** `pck_results_per_image.json`
+- **Per-point:** `pck_results_per_point.json`
+- **Per-category:** `pck_results_per_category.json` (mean PCK per SPair-71k category per eval run)
+- **Per-difficulty:** `pck_results_by_difficulty_flag.json` (viewpoint, scale, truncation, occlusion)
 
 ---
 
@@ -178,33 +187,40 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 ### 8.1 Stage order
 
 1. Optional **`verify_dataset`**
-2. **Fine-tune** for each enabled backbone (tuple flags)
+2. **Fine-tune** for each enabled backbone × each block count in `LAST_BLOCKS_LIST`
 3. **LoRA** for each enabled backbone
-4. **PCK** matrix: baseline, WSA, fine-tuned checkpoint, LoRA checkpoint (per flags) + optional **`runs/pipeline_exports/`** JSON/CSV
+4. **PCK** matrix: baseline, baseline+WSA, fine-tuned (per block count), fine-tuned+WSA, LoRA, LoRA+WSA (per flags) + optional **`runs/pipeline_exports/`** JSON/CSV + per-category export
 5. Optional **`pytest`**
-6. Optional Jupyter hint
 
 **Tuple order is always** `(dinov2_vitb14, dinov3_vitb16, sam_vit_b)`.
 
 ### 8.2 Default configuration (in-script; YAML overrides)
 
-| Symbol | Typical default |
-|--------|-------------------|
-| `TRAIN_BATCH_SIZE` | 100 |
-| `FT_EPOCHS` / `LORA_EPOCHS` | 200 |
-| `FT_PATIENCE` / `LORA_PATIENCE` | 10 |
-| `LAST_BLOCKS` | 2 |
-| `LORA_RANK` | 8 |
-| `PREPROCESS` | `FIXED_RESIZE` |
-| `IMAGE_HEIGHT` / `IMAGE_WIDTH` | 784 / 784 |
-| `EVAL_SPLIT` | `test` |
-| `EVAL_LIMIT` | 0 (full split) |
-| `LOG_BATCH_INTERVAL` | 100 |
-| `RESUME_SAVE_INTERVAL` | 100 (mid-epoch `*_resume.pt` cadence; training CLIs default **100** when not passed) |
+| Symbol | Typical default | Description |
+|--------|-----------------|-------------|
+| `LAST_BLOCKS_LIST` | `[1, 2, 4]` | Block counts for fine-tuning sweep (PDF Stage 2) |
+| `FT_BATCH_SIZE` / `LORA_BATCH_SIZE` | 100 / 100 | Separate batch sizes for fine-tune and LoRA |
+| `FT_LR` / `LORA_LR` | `5e-5` / `1e-3` | Learning rates |
+| `FT_WEIGHT_DECAY` | `0.01` | Weight decay for fine-tuning |
+| `LORA_ALPHA` | `16.0` | LoRA scaling factor |
+| `LORA_LAST_BLOCKS` | `2` | LoRA block count |
+| `FT_EPOCHS` / `LORA_EPOCHS` | 200 | Epochs per training stage |
+| `FT_PATIENCE` / `LORA_PATIENCE` | 10 | Early stopping patience |
+| `LORA_RANK` | 8 | LoRA rank |
+| `PREPROCESS` | `FIXED_RESIZE` | Image preprocessing mode |
+| `IMAGE_HEIGHT` / `IMAGE_WIDTH` | 784 / 784 | Input image size |
+| `EVAL_SPLIT` | `test` | Evaluation split |
+| `EVAL_LIMIT` | 0 (full split) | Pair limit for debugging |
+| `LOG_BATCH_INTERVAL` | 100 | Batch logging frequency |
+| `RESUME_SAVE_INTERVAL` | 100 | Mid-epoch resume checkpoint cadence |
 
-**Resume:** `PIPELINE_RESUME` uses `runs/pipeline_state.json`. **`fingerprint_from_config`** hashes `_fingerprint_payload()` (includes `TRAIN_BATCH_SIZE`, `RESUME_SAVE_INTERVAL`, epochs, weights paths, eval flags, etc.). A mismatch **clears** completed steps so incompatible runs are not mixed.
+**Workflow toggles:** In addition to baseline and checkpoint eval toggles, `RUN_EVAL_FINETUNED_WSA` and `RUN_EVAL_LORA_WSA` enable WSA evaluation on trained checkpoints (PDF Stage 3 combined with Stages 2 and 4).
 
-**YAML `--config`:** `_apply_pipeline_yaml` maps sections into module globals. If both **`finetune.batch_size`** and **`lora.batch_size`** are present, the **lora** block is applied **after** finetune, so **`lora.batch_size` wins** for `TRAIN_BATCH_SIZE`.
+**Resume:** `PIPELINE_RESUME` uses `runs/pipeline_state.json`. **`fingerprint_from_config`** hashes `_fingerprint_payload()` (all training hyperparameters, block lists, eval flags, etc.). A mismatch **clears** completed steps so incompatible runs are not mixed.
+
+**YAML `--config`:** `_apply_pipeline_yaml` maps sections into module globals. Fine-tuning and LoRA have **separate** batch size fields (`finetune.batch_size` → `FT_BATCH_SIZE`, `lora.batch_size` → `LORA_BATCH_SIZE`); they no longer share a single variable. The `finetune.last_blocks` field accepts either a single integer or a list.
+
+**Colab overrides:** The Colab notebook writes `config.yaml` with reduced values suitable for T4 GPU: `batch_size: 10`, `epochs: 50`, `patience: 7`. These differ from the in-script defaults (100/200/10) intentionally — see §10.
 
 ### 8.3 Environment variables
 
@@ -237,7 +253,8 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 - **`utils/notebook_workflow.py`:** builds subprocess commands to `train_finetune.py` / `train_lora.py` / eval scripts from YAML.
 - **`notebooks/notebook_config.example.yaml`:** full template.
 - **`AML.ipynb`:** generated by `notebooks/_generate_aml_local.py`; intended for local Linux + NVIDIA Jupyter where the repo and dataset are already present.
-- **`AML_Colab.ipynb`:** generated by `notebooks/_generate_aml_colab.py`; runs end-to-end on Google Colab (clone repo, download + extract SPair-71k, download pretrained weights, write `config.yaml`, run the pipeline).
+- **`AML_Colab.ipynb`:** generated by `notebooks/_generate_aml_colab.py`; runs end-to-end on Google Colab (clone repo, download + extract SPair-71k, download pretrained weights, write `config.yaml`, run the pipeline). Includes post-pipeline analysis cells: aggregate PCK table, multi-block comparison plot, per-category heatmap, per-difficulty breakdown, and qualitative keypoint visualizations.
+- **Colab-specific overrides:** the Colab notebook writes `config.yaml` with reduced training parameters (`batch_size: 10`, `epochs: 50`, `patience: 7`) compared to the pipeline defaults (100/200/10). This is intentional: Colab T4 GPUs have 16GB VRAM and limited session time. The pipeline resume mechanism and Google Drive symlinks handle disconnects.
 - **`config.yaml`:** notebook-generated pipeline configuration. It contains machine-specific absolute paths, so it is **not tracked in git** (see `.gitignore`). Both notebooks write it for `scripts/run_pipeline.py --config config.yaml`.
 - **Two YAML readers:** the pipeline applies keys via `_apply_pipeline_yaml` in `run_pipeline.py` (``dataset``, ``workflow_toggles``, …). `utils.notebook_workflow.load_workflow_config` reads the same file shape for ad-hoc training from a notebook and **ignores** keys it does not model (e.g. ``eval_split``, ``resume_save_interval`` on ``runtime``).
 - **SPair-71k download URL (Colab):** `https://cvlab.postech.ac.kr/research/SPair-71k/data/SPair-71k.tar.gz`

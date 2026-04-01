@@ -128,7 +128,7 @@ def build_dataset(
     spair_root:
         Optional override path to ``SPair-71k`` folder itself (native backend only).
     """
-    if dataset.name.lower() not in ("spair", "spair-71k", "spair-71k", "spair71k"):
+    if dataset.name.lower() not in ("spair", "spair-71k", "spair71k"):
         raise ValueError(f"Only SPair is supported for now, got dataset.name={dataset.name!r}")
 
     if dataset.backend == "native":

@@ -15,7 +15,12 @@ from models.common.matching import (
     sample_features_bilinear,
 )
 from models.common.vit_intermediate import extract_intermediate_dense_grid, fuse_layer_features
-from models.common.lora import LoRALinear, apply_lora_to_last_blocks_mlp, lora_trainable_parameters
+from models.common.lora import (
+    LoRALinear,
+    apply_lora_to_last_blocks_mlp,
+    apply_lora_to_last_blocks_mlp_sam,
+    lora_trainable_parameters,
+)
 from models.common.window_soft_argmax import refine_predictions_window_soft_argmax, window_soft_argmax_xy
 
 __all__ = [
@@ -24,6 +29,7 @@ __all__ = [
     "DenseFeatureExtractor",
     "LoRALinear",
     "apply_lora_to_last_blocks_mlp",
+    "apply_lora_to_last_blocks_mlp_sam",
     "argmax_to_pixel_xy",
     "denormalize_imagenet",
     "extract_intermediate_dense_grid",

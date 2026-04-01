@@ -12,7 +12,7 @@ only LoRA tensors.
 
 from training.config import EarlyStoppingConfig, FinetuneConfig, LoRAConfig, TrainPaths
 from training.early_stopping import EarlyStopping
-from training.engine import correspondence_gaussian_loss_dino_vit
+from training.engine import correspondence_gaussian_loss_dino_vit, correspondence_gaussian_loss_sam
 from training.losses import (
     gaussian_ce_loss_from_similarity_maps,
     gaussian_grid_2d,
@@ -34,6 +34,7 @@ __all__ = [
     "TrainPaths",
     "collect_trainable_parameter_groups",
     "correspondence_gaussian_loss_dino_vit",
+    "correspondence_gaussian_loss_sam",
     "freeze_all",
     "gaussian_ce_loss_from_similarity_maps",
     "gaussian_grid_2d",
