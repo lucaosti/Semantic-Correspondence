@@ -35,18 +35,16 @@ Dense keypoint correspondence between semantically similar images, evaluated on 
 ## Quick Start
 
 ```bash
-# 1. Clone and setup
+# 1. Clone and install
 git clone https://github.com/lucaosti/Semantic-Correspondence.git
 cd Semantic-Correspondence
-bash scripts/bootstrap_venv.sh
-source .venv/bin/activate
+pip install -e ".[dev]"
 
 # 2. Verify dataset (SPair-71k under data/SPair-71k/)
 python scripts/verify_dataset.py
 
-# 3. Download pretrained weights
+# 3. Download pretrained weights (DINOv2, DINOv3, SAM)
 python scripts/download_pretrained_weights.py
-bash scripts/download_sam_vit_b.sh
 
 # 4. Run the full pipeline
 python scripts/run_pipeline.py
@@ -72,10 +70,8 @@ Artifacts persist on Google Drive via symlinks (`runs/`, `checkpoints/`), so tra
 | `evaluation/` | PCK metrics, experiment runner, keypoint visualization |
 | `data/` | SPair-71k dataset, preprocessing, data interface |
 | `scripts/` | CLI tools and `run_pipeline.py` orchestrator |
-| `docs/` | Project rules (`info.md`), literature review (`references.md`) |
-| `notebooks/` | Notebook generators, example configs |
-| `AML_Colab.ipynb` | Google Colab end-to-end notebook (generated) |
-| `AML.ipynb` | Local Jupyter notebook (generated) |
+| `docs/` | Project rules (`info.md`), literature review (`references.md`), state of the art (`state-of-art.md`) |
+| `AML_Colab.ipynb` | Google Colab end-to-end notebook |
 | `documentation.md` | Full technical reference |
 
 ## Configuration
@@ -113,3 +109,4 @@ See `documentation.md` for the full configuration reference.
 - **[`documentation.md`](documentation.md)** — full technical reference (architecture, defaults, maintenance)
 - **[`docs/info.md`](docs/info.md)** — project rules (splits, weights policy, WSA constraints)
 - **[`docs/references.md`](docs/references.md)** — literature review and references
+- **[`docs/state-of-art.md`](docs/state-of-art.md)** — state-of-the-art analysis and design rationale

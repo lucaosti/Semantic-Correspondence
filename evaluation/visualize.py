@@ -8,7 +8,7 @@ in Colab / Jupyter notebooks.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -129,66 +129,5 @@ def visualize_correspondences(
 
     if title:
         fig.suptitle(title, fontsize=12)
-    fig.tight_layout()
-    return fig
-
-
-def visualize_correspondences_grid(
-    samples: Sequence[dict],
-    *,
-    alpha: float = 0.1,
-    max_pairs: int = 4,
-    figsize_per_pair: Tuple[float, float] = (14, 4),
-    mean: Tuple[float, float, float] = _IMAGENET_MEAN,
-    std: Tuple[float, float, float] = _IMAGENET_STD,
-) -> "Figure":
-    """
-    Visualize multiple image pairs in a vertical grid.
-
-    Each element of *samples* must be a dict with keys:
-    ``src_img``, ``tgt_img``, ``src_kps``, ``pred_tgt_kps``, ``gt_tgt_kps``,
-    ``pck_threshold``, and optionally ``title``.
-    """
-    if plt is None:
-        raise ImportError("matplotlib is required.")
-    n = min(len(samples), max_pairs)
-    fig, axes = plt.subplots(n, 2, figsize=(figsize_per_pair[0], figsize_per_pair[1] * n))
-    if n == 1:
-        axes = axes[np.newaxis, :]
-
-    for row, s in enumerate(samples[:n]):
-        src_np = _to_numpy_hwc(s["src_img"], mean, std)
-        tgt_np = _to_numpy_hwc(s["tgt_img"], mean, std)
-
-        def _np(t):
-            if isinstance(t, torch.Tensor):
-                return t.detach().cpu().float().numpy()
-            return np.asarray(t, dtype=np.float32)
-
-        src_pts = _np(s["src_kps"])
-        pred_pts = _np(s["pred_tgt_kps"])
-        gt_pts = _np(s["gt_tgt_kps"])
-        pck_thr = float(s.get("pck_threshold", 1.0))
-
-        valid = (gt_pts[:, 0] > -2.0) & (gt_pts[:, 1] > -2.0)
-        valid &= (src_pts[:, 0] > -2.0) & (src_pts[:, 1] > -2.0)
-        dist = np.linalg.norm(pred_pts - gt_pts, axis=-1)
-        correct = dist <= alpha * pck_thr
-
-        axes[row, 0].imshow(src_np)
-        axes[row, 0].set_title(s.get("title", f"Pair {row}") + " (src)")
-        axes[row, 0].axis("off")
-        axes[row, 1].imshow(tgt_np)
-        axes[row, 1].set_title("(tgt: green=correct, red=wrong)")
-        axes[row, 1].axis("off")
-
-        for i in range(len(src_pts)):
-            if not valid[i]:
-                continue
-            c = "tab:green" if correct[i] else "tab:red"
-            axes[row, 0].scatter(src_pts[i, 0], src_pts[i, 1], s=40, c=c, edgecolors="white", linewidths=0.4, zorder=5)
-            axes[row, 1].scatter(pred_pts[i, 0], pred_pts[i, 1], s=40, c=c, edgecolors="white", linewidths=0.4, zorder=5, marker="x")
-            axes[row, 1].scatter(gt_pts[i, 0], gt_pts[i, 1], s=20, c="blue", edgecolors="white", linewidths=0.3, zorder=4, alpha=0.5)
-
     fig.tight_layout()
     return fig

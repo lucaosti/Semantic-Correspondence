@@ -9,3 +9,5 @@ This repository implements semantic correspondence on **SPair-71k** with dense f
 **Benchmark:** SPair-71k is the standard split for category-level semantic correspondence; pair lists and annotations follow the usual community layout (see [`data/dataset.py`](../data/dataset.py)).
 
 **Project rules** (splits, prefer official weights; Hugging Face mirrors allowed only as a fallback with SHA256 when available; WSA only at inference) are summarized in [`info.md`](info.md).
+
+**State of the art:** [`state-of-art.md`](state-of-art.md) provides a comprehensive analysis of the design rationale, covering backbone selection, loss formulation (Gaussian CE), WSA, LoRA, photometric augmentation strategy, and PCK evaluation methodology.

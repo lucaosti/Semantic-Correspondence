@@ -18,21 +18,13 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from itertools import islice
-from typing import Any, Optional
-
-# Per-epoch shuffle must be reproducible so mid-epoch resume skips the same batch order.
-_TRAIN_SHUFFLE_SEED_BASE = 90210
 
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from data.dataset import PreprocessMode, SPair71kPairDataset, build_photometric_pair_transform, spair_collate_fn
 from data.paths import resolve_spair_root
-from data.dataset import PreprocessMode, SPair71kPairDataset, spair_collate_fn
-from models.dinov2.backbone import build_dinov2_vit_b14
-from models.dinov3.backbone import build_dinov3_vit_b16
-from models.sam.backbone import build_sam_vit_b_image_encoder
+from scripts._training_common import build_backbone, run_gaussian_training_loop
 from training.config import EarlyStoppingConfig
 from training.early_stopping import EarlyStopping
 from training.engine import correspondence_gaussian_loss_dino_vit, correspondence_gaussian_loss_sam
@@ -108,28 +100,6 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _save_resume_atomic(path: str, payload: dict[str, Any]) -> None:
-    tmp = path + ".tmp"
-    torch.save(payload, tmp)
-    os.replace(tmp, path)
-
-
-def _build_backbone(
-    name: str,
-    *,
-    d2: Optional[str],
-    d3: Optional[str],
-    sam_ckpt: Optional[str],
-) -> nn.Module:
-    if name == "dinov2_vitb14":
-        return build_dinov2_vit_b14(pretrained=d2 is None, weights_path=d2)
-    if name == "dinov3_vitb16":
-        return build_dinov3_vit_b16(pretrained=d3 is None, weights_path=d3)
-    if name == "sam_vit_b":
-        return build_sam_vit_b_image_encoder(checkpoint_path=sam_ckpt)
-    raise ValueError(name)
-
-
 def main() -> int:
     args = parse_args()
     if args.batch_size < 1:
@@ -147,11 +117,11 @@ def main() -> int:
     device = torch.device(resolve_device_str(args.device))
     num_workers = resolve_num_workers(args.num_workers, accelerator=device.type)
     maybe_tune_threads_for_cpu_device(device.type, dataloader_workers=num_workers)
-    model = _build_backbone(
+    model = build_backbone(
         args.backbone,
-        d2=args.dinov2_weights,
-        d3=args.dinov3_weights,
-        sam_ckpt=args.sam_checkpoint,
+        dinov2_weights=args.dinov2_weights,
+        dinov3_weights=args.dinov3_weights,
+        sam_checkpoint=args.sam_checkpoint,
     ).to(device)
     apply_accelerator_throughput_tweaks(device)
 
@@ -166,7 +136,7 @@ def main() -> int:
         preprocess=mode,
         output_size_hw=(args.height, args.width),
         normalize=True,
-        photometric_augment=None,
+        photometric_augment=build_photometric_pair_transform(),
     )
     val_ds = SPair71kPairDataset(
         spair_root=root,
@@ -193,57 +163,9 @@ def main() -> int:
     es_cfg = EarlyStoppingConfig(patience=args.patience, mode="min")
     stopper = EarlyStopping(patience=es_cfg.patience, mode=es_cfg.mode)
 
-    best_val = float("inf")
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     resume_path = os.path.join(
         args.checkpoint_dir, f"{args.backbone}_lastblocks{args.last_blocks}_resume.pt"
-    )
-    full_epochs_done = 0
-    batch_in_epoch = 0
-    if args.resume:
-        if os.path.isfile(args.resume):
-            try:
-                blob = torch.load(args.resume, map_location=device, weights_only=False)
-            except TypeError:
-                blob = torch.load(args.resume, map_location=device)
-            model.load_state_dict(blob["model"], strict=True)
-            opt.load_state_dict(blob["optimizer"])
-            best_val = float(blob.get("best_val", float("inf")))
-            s = blob.get("stopper") or {}
-            stopper.best_value = s.get("best_value")
-            stopper.num_bad_epochs = int(s.get("num_bad_epochs", 0))
-            stopper.best_epoch = int(s.get("best_epoch", -1))
-            stopper.patience = int(s.get("patience", stopper.patience))
-            stopper.min_delta = float(s.get("min_delta", stopper.min_delta))
-            stopper.mode = s.get("mode", stopper.mode)  # type: ignore[assignment]
-            if "full_epochs_done" in blob:
-                full_epochs_done = int(blob["full_epochs_done"])
-                batch_in_epoch = int(blob.get("batch_in_epoch", 0))
-            else:
-                full_epochs_done = int(blob["epoch"]) + 1
-                batch_in_epoch = 0
-            print(
-                f"train_finetune: RESUME full_epochs_done={full_epochs_done} batch_in_epoch={batch_in_epoch} "
-                f"(file={args.resume} best_val={best_val})",
-                flush=True,
-            )
-            if batch_in_epoch:
-                print(
-                    f"train_finetune: mid-epoch resume; skipping first {batch_in_epoch} batches "
-                    f"of epoch {full_epochs_done + 1}/{args.epochs} (1-based)",
-                    flush=True,
-                )
-        else:
-            print(
-                f"train_finetune: WARNING --resume file missing ({args.resume}); starting from scratch.",
-                flush=True,
-            )
-
-    print(
-        f"train_finetune: device={device} backbone={args.backbone} "
-        f"epochs={args.epochs} batch_size={args.batch_size} "
-        f"num_workers={num_workers} resume_save_interval={args.resume_save_interval}",
-        flush=True,
     )
 
     layer_indices = 4
@@ -254,117 +176,35 @@ def main() -> int:
             return correspondence_gaussian_loss_sam(model, batch_tensors)
         return correspondence_gaussian_loss_dino_vit(model, batch_tensors, layer_indices=layer_indices)
 
-    resume_skip_remaining = batch_in_epoch
-    for epoch in range(full_epochs_done, args.epochs):
-        skip_batches = resume_skip_remaining
-        resume_skip_remaining = 0
-        gen = torch.Generator()
-        gen.manual_seed(_TRAIN_SHUFFLE_SEED_BASE + epoch)
-        train_loader = DataLoader(
-            train_ds,
-            batch_size=args.batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            collate_fn=spair_collate_fn,
-            pin_memory=pin_memory_for(device),
-            generator=gen,
-            worker_init_fn=_winit,
-            **dl_kw,
-        )
-        n_train_batches = len(train_loader)
-        print(f"epoch {epoch + 1}/{args.epochs} (train batches: {n_train_batches})", flush=True)
-        model.train()
-        total_loss = 0.0
-        n_batches = 0
-        train_it = iter(train_loader)
-        if skip_batches:
-            train_it = islice(train_it, skip_batches, None)
-        for batch_idx, batch in enumerate(train_it, start=skip_batches):
-            if args.log_batch_interval and batch_idx % args.log_batch_interval == 0:
-                print(f"  batch {batch_idx}/{n_train_batches}", flush=True)
-            batch = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
-            opt.zero_grad(set_to_none=True)
-            loss = _step_loss(batch)
-            if not torch.isfinite(loss):
-                continue
-            loss.backward()
-            opt.step()
-            total_loss += float(loss.detach().cpu())
-            n_batches += 1
-            done_in_epoch = batch_idx + 1
-            iv = args.resume_save_interval
-            if iv > 0 and (done_in_epoch % iv == 0 or done_in_epoch == n_train_batches):
-                _save_resume_atomic(
-                    resume_path,
-                    {
-                        "model": model.state_dict(),
-                        "optimizer": opt.state_dict(),
-                        "epoch": epoch,
-                        "full_epochs_done": epoch,
-                        "batch_in_epoch": done_in_epoch,
-                        "best_val": best_val,
-                        "stopper": {
-                            "patience": stopper.patience,
-                            "min_delta": stopper.min_delta,
-                            "mode": stopper.mode,
-                            "best_value": stopper.best_value,
-                            "num_bad_epochs": stopper.num_bad_epochs,
-                            "best_epoch": stopper.best_epoch,
-                        },
-                    },
-                )
-                print(
-                    f"train_finetune: saved resume checkpoint (batch_in_epoch={done_in_epoch}/{n_train_batches}) -> {resume_path}",
-                    flush=True,
-                )
-        train_loss = total_loss / max(n_batches, 1)
+    def _save_best(epoch: int, val_loss: float) -> None:
+        ckpt = os.path.join(args.checkpoint_dir, f"{args.backbone}_lastblocks{args.last_blocks}_best.pt")
+        torch.save({"model": model.state_dict(), "epoch": epoch, "val_loss": val_loss}, ckpt)
 
-        model.eval()
-        val_loss = 0.0
-        vn = 0
-        with torch.no_grad():
-            for batch in val_loader:
-                batch = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
-                loss = _step_loss(batch)
-                if torch.isfinite(loss):
-                    val_loss += float(loss.cpu())
-                    vn += 1
-        val_loss = val_loss / max(vn, 1)
-
-        print(f"epoch={epoch} train_loss={train_loss:.6f} val_loss={val_loss:.6f}")
-
-        if val_loss < best_val:
-            best_val = val_loss
-            ckpt = os.path.join(args.checkpoint_dir, f"{args.backbone}_lastblocks{args.last_blocks}_best.pt")
-            torch.save({"model": model.state_dict(), "epoch": epoch, "val_loss": val_loss}, ckpt)
-
-        _save_resume_atomic(
-            resume_path,
-            {
-                "model": model.state_dict(),
-                "optimizer": opt.state_dict(),
-                "epoch": epoch,
-                "full_epochs_done": epoch + 1,
-                "batch_in_epoch": 0,
-                "best_val": best_val,
-                "stopper": {
-                    "patience": stopper.patience,
-                    "min_delta": stopper.min_delta,
-                    "mode": stopper.mode,
-                    "best_value": stopper.best_value,
-                    "num_bad_epochs": stopper.num_bad_epochs,
-                    "best_epoch": stopper.best_epoch,
-                },
-            },
-        )
-
-        if stopper.step(val_loss, epoch):
-            print(f"Early stopping at epoch {epoch}")
-            break
-
-    if os.path.isfile(resume_path):
-        os.remove(resume_path)
-    print("Done.")
+    run_gaussian_training_loop(
+        model=model,
+        optimizer=opt,
+        device=device,
+        train_ds=train_ds,
+        val_loader=val_loader,
+        step_loss=_step_loss,
+        stopper=stopper,
+        resume_path=resume_path,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        num_workers=num_workers,
+        dl_kw=dl_kw,
+        worker_init_fn=_winit,
+        pin_memory=pin_memory_for(device),
+        log_batch_interval=args.log_batch_interval,
+        resume_save_interval=args.resume_save_interval,
+        resume_arg=args.resume,
+        script_tag="train_finetune",
+        collate_fn=spair_collate_fn,
+        extra_resume_payload=None,
+        save_best_checkpoint=_save_best,
+        epoch_log_suffix=None,
+        log_preamble_extra=f"backbone={args.backbone} ",
+    )
     return 0
 
 

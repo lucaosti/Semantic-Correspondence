@@ -19,8 +19,6 @@ from .dataset import (
     round_side_to_patch_multiple,
     spair_collate_fn,
     spair_split_filename,
-    visualize_correspondences,
-    visualize_pair,
 )
 
 __all__ = [
@@ -38,6 +36,4 @@ __all__ = [
     "round_side_to_patch_multiple",
     "spair_collate_fn",
     "spair_split_filename",
-    "visualize_correspondences",
-    "visualize_pair",
 ]

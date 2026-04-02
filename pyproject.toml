@@ -27,13 +27,14 @@ notebook = [
   "ipykernel>=6.0.0",
   "pandas>=2.0.0",
 ]
-dashboard = [
-  "rich>=13.0.0",
-]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["data*", "models*", "training*", "evaluation*", "utils*", "third_party*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
 
 [tool.ruff]
 line-length = 100

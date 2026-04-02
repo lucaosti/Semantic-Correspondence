@@ -36,7 +36,10 @@ def load_encoder_weights_from_pt(
     dict[str, int]
         Counts of ``missing`` and ``unexpected`` keys from ``load_state_dict(..., strict=False)``.
     """
-    ckpt = torch.load(checkpoint_path, map_location=map_location)
+    try:
+        ckpt = torch.load(checkpoint_path, map_location=map_location, weights_only=False)
+    except TypeError:
+        ckpt = torch.load(checkpoint_path, map_location=map_location)
     state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
     missing, unexpected = extractor.encoder.load_state_dict(state, strict=False)
     extractor.eval()

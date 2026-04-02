@@ -11,7 +11,7 @@ the repository root with the venv active and ``pip install -e .``:
    python scripts/run_pipeline.py --config config.yaml
 
 The optional ``--config`` flag loads a YAML file (same shape as notebook-written ``config.yaml``:
-see ``AML_Colab.ipynb`` / ``AML.ipynb`` generators) and overrides the in-script defaults without
+see ``AML_Colab.ipynb`` generator) and overrides the in-script defaults without
 editing this file.
 
 Order of execution: dataset verification (optional) → fine-tune (per backbone flag) → LoRA (per
@@ -20,14 +20,14 @@ flag) → PCK evaluation and optional exports → optional pytest → optional n
 The three tuple slots always mean **(DINOv2 ViT-B/14, DINOv3 ViT-B/16, SAM ViT-B)**.
 
 Defaults run **all** steps for **all** backbones. SAM needs weights: place
-``checkpoints/sam_vit_b_01ec64.pth`` (run ``bash scripts/download_sam_vit_b.sh``), set
-``SAM_CHECKPOINT`` below, or export ``SAM_CHECKPOINT``.
+``checkpoints/sam_vit_b_01ec64.pth`` (downloaded by ``scripts/download_pretrained_weights.py``),
+set ``SAM_CHECKPOINT`` below, or export ``SAM_CHECKPOINT``.
 
 Logs: each invocation writes ``runs/logs/pipeline_<UTC_stamp>.log``, updates ``runs/logs/manifest.tsv``,
 and sets ``runs/logs/current.log`` (symlink) to that file. Subprocess output is merged into the same file (see
 :class:`PipelineLogger`). With ``SEMANTIC_CORRESPONDENCE_PIPELINE_LOG_FILE_ONLY=1`` (set by
-``scripts/start_pipeline_detached.sh``), nothing is mirrored to the process stdout/stderr—use
-``scripts/reconnect_dashboard.sh`` or ``tail -f runs/logs/current.log`` to watch progress.
+the environment variable), nothing is mirrored to the process stdout/stderr—use
+``tail -f runs/logs/current.log`` to watch progress.
 
 Structured stage traces append to ``runs/logs/stage_events.jsonl`` (one JSON object per line: ``action``, ``stage_id``, ``ts_utc``, …).
 

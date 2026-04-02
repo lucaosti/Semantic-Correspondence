@@ -15,7 +15,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import torch
 from torch.utils.data import DataLoader, Subset
 
-from data.dataset import spair_collate_fn
 from data.paths import resolve_spair_root
 from evaluation.baseline_eval import build_eval_dataloader, evaluate_spair_loader
 from evaluation.checkpoint_loader import load_encoder_weights_from_pt
@@ -26,7 +25,7 @@ from utils.hardware import pin_memory_for, recommended_device_str
 @dataclass
 class EvalRunSpec:
     """
-    One evaluation configuration (matches ``scripts/eval_baseline.py`` options).
+    One evaluation configuration (mirrors CLI evaluation options).
 
     Attributes
     ----------
@@ -159,7 +158,6 @@ def run_spair_pck_eval(
         )
         extras: Dict[str, Any] = {}
     elif spec.metrics_backend == "sd4match":
-        from evaluation.sd4match_metrics import evaluate_matches_sd4match
         from models.common.matching import predict_correspondences_cosine_argmax
         from models.common.window_soft_argmax import refine_predictions_window_soft_argmax
 
@@ -168,12 +166,8 @@ def run_spair_pck_eval(
         extractor.eval()
         extractor.to(eval_device)
 
-        # SD4Match expects per-sample category strings.
-        per_image_agg = None
-        per_point_agg = None
         summary = None
 
-        from data.dataset import INVALID_KP_COORD
         from models.common.coord_utils import rescale_keypoints_xy
 
         def _hw(img_bchw: torch.Tensor) -> Tuple[int, int]:
@@ -212,11 +206,7 @@ def run_spair_pck_eval(
                 return _bucket01(batch[alt])
             return None
 
-        # Accumulate by calling SD4Match evaluator on a growing list is expensive; instead,
-        # compute per-sample and concatenate/extend using SD4Match's own accumulator format.
-        per_image_result: Dict[str, Dict[str, float]] = {}
-        per_point_result: Dict[str, Dict[str, List[float]]] = {}
-        # We'll store SD4Match evaluator outputs directly per run (method_name='custom').
+        # Build SD4Match evaluators and extend their internal accumulator lists.
 
         # Build fresh evaluators and extend their internal lists.
         from third_party.sd4match.utils.evaluator import PCKEvaluator as _P

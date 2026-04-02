@@ -25,17 +25,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, Union
 
-import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
 from torchvision.transforms import functional as TF
-
-try:
-    import matplotlib.pyplot as plt
-except ImportError:  # pragma: no cover - optional for headless environments
-    plt = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -725,164 +719,6 @@ def build_photometric_pair_transform(
         return _one(src), _one(tgt)
 
     return _apply_pair
-
-
-# ---------------------------------------------------------------------------
-# Visualization
-# ---------------------------------------------------------------------------
-
-
-def visualize_pair(
-    src: Union[torch.Tensor, Image.Image],
-    tgt: Union[torch.Tensor, Image.Image],
-    title: Optional[str] = None,
-    mean: Tuple[float, float, float] = (0.485, 0.456, 0.406),
-    std: Tuple[float, float, float] = (0.229, 0.224, 0.225),
-) -> None:
-    """
-    Plot a source/target pair side-by-side.
-
-    Parameters
-    ----------
-    src, tgt:
-        Images as ``CHW`` tensors (normalized with ImageNet mean/std) or PIL images.
-    title:
-        Optional figure title.
-    mean, std:
-        Denormalization parameters if tensors are normalized.
-
-    Returns
-    -------
-    None
-        Displays a matplotlib figure.
-
-    Raises
-    ------
-    ImportError
-        If matplotlib is not installed.
-    """
-    if plt is None:
-        raise ImportError("matplotlib is required for visualize_pair().")
-
-    def _to_numpy(im: Union[torch.Tensor, Image.Image]) -> np.ndarray:
-        if isinstance(im, Image.Image):
-            return np.asarray(im)
-        if not isinstance(im, torch.Tensor):
-            raise TypeError(f"Unsupported image type: {type(im)}")
-        x = im.detach().cpu().float()
-        if x.ndim != 3:
-            raise ValueError(f"Expected CHW tensor, got shape {tuple(x.shape)}")
-        for i in range(3):
-            x[i] = x[i] * std[i] + mean[i]
-        x = (x.clamp(0.0, 1.0) * 255.0).byte().numpy().transpose(1, 2, 0)
-        return x
-
-    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
-    axes[0].imshow(_to_numpy(src))
-    axes[0].set_title("source")
-    axes[0].axis("off")
-    axes[1].imshow(_to_numpy(tgt))
-    axes[1].set_title("target")
-    axes[1].axis("off")
-    if title:
-        fig.suptitle(title)
-    fig.tight_layout()
-    plt.show()
-
-
-def visualize_correspondences(
-    src: Union[torch.Tensor, Image.Image],
-    tgt: Union[torch.Tensor, Image.Image],
-    src_kps_xy: torch.Tensor,
-    tgt_kps_xy: torch.Tensor,
-    pred_tgt_kps_xy: Optional[torch.Tensor] = None,
-    n_points: Optional[int] = None,
-    title: Optional[str] = None,
-    mean: Tuple[float, float, float] = (0.485, 0.456, 0.406),
-    std: Tuple[float, float, float] = (0.229, 0.224, 0.225),
-) -> None:
-    """
-    Visualize ground-truth correspondences (and optional predictions) between a pair.
-
-    Keypoints are drawn in the same coordinate system as the provided images/tensors.
-
-    Parameters
-    ----------
-    src, tgt:
-        Images (PIL or normalized ``CHW`` tensors).
-    src_kps_xy, tgt_kps_xy:
-        ``(N, 2)`` tensors ``(x, y)`` in pixel coordinates matching the visuals.
-    pred_tgt_kps_xy:
-        Optional ``(N, 2)`` predicted target points.
-    n_points:
-        If provided, only the first ``n_points`` matches are drawn.
-    title:
-        Optional figure title.
-
-    Returns
-    -------
-    None
-        Displays a matplotlib figure.
-    """
-    if plt is None:
-        raise ImportError("matplotlib is required for visualize_correspondences().")
-
-    def _to_numpy(im: Union[torch.Tensor, Image.Image]) -> np.ndarray:
-        if isinstance(im, Image.Image):
-            arr = np.asarray(im).astype(np.float32)
-            if arr.ndim == 2:
-                raise ValueError("Expected RGB image.")
-            if arr.max() > 1.0:
-                arr /= 255.0
-            return arr
-        if not isinstance(im, torch.Tensor):
-            raise TypeError(f"Unsupported image type: {type(im)}")
-        x = im.detach().cpu().float()
-        if x.ndim != 3:
-            raise ValueError(f"Expected CHW tensor, got shape {tuple(x.shape)}")
-        for i in range(3):
-            x[i] = x[i] * std[i] + mean[i]
-        x = (x.clamp(0.0, 1.0) * 255.0).byte().numpy().transpose(1, 2, 0).astype(np.float32) / 255.0
-        return x
-
-    src_np = _to_numpy(src)
-    tgt_np = _to_numpy(tgt)
-    h = max(src_np.shape[0], tgt_np.shape[0])
-    canvas = np.ones((h, src_np.shape[1] + tgt_np.shape[1], 3), dtype=np.float32)
-    canvas[:, : src_np.shape[1], :] = src_np
-    canvas[: tgt_np.shape[0], src_np.shape[1] :, :] = tgt_np
-
-    sk = src_kps_xy.detach().cpu().float().numpy()
-    tk = tgt_kps_xy.detach().cpu().float().numpy()
-    if pred_tgt_kps_xy is not None:
-        pk = pred_tgt_kps_xy.detach().cpu().float().numpy()
-    else:
-        pk = None
-
-    n = sk.shape[0] if n_points is None else int(min(n_points, sk.shape[0]))
-
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.imshow(canvas)
-    ax.axis("off")
-    if title:
-        ax.set_title(title)
-
-    rng_colors = np.random.default_rng(0)
-    for i in range(n):
-        if sk[i, 0] < 0 or sk[i, 1] < 0 or tk[i, 0] < 0 or tk[i, 1] < 0:
-            continue
-        color = rng_colors.random(3)
-        x1, y1 = float(sk[i, 0]), float(sk[i, 1])
-        x2, y2 = float(tk[i, 0]) + float(src_np.shape[1]), float(tk[i, 1])
-        ax.plot([x1, x2], [y1, y2], "-", color=color, linewidth=1.0, alpha=0.8)
-        ax.scatter([x1], [y1], s=18, c=[color], marker="o")
-        ax.scatter([x2], [y2], s=18, c=[color], marker="x")
-        if pk is not None:
-            x3, y3 = float(pk[i, 0]) + float(src_np.shape[1]), float(pk[i, 1])
-            ax.scatter([x3], [y3], s=22, facecolors="none", edgecolors=[color], marker="o")
-
-    fig.tight_layout()
-    plt.show()
 
 
 # ---------------------------------------------------------------------------
