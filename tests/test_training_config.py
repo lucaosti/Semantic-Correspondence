@@ -11,6 +11,7 @@ def test_finetune_config_defaults():
     assert c.batch_size == 100
     assert c.last_blocks == 2
     assert c.dino_layer_indices == 4
+    assert c.precision == "auto"
 
 
 def test_lora_config_defaults():
@@ -19,6 +20,7 @@ def test_lora_config_defaults():
     assert c.alpha == 16.0
     assert c.target == "mlp"
     assert c.dino_layer_indices == 4
+    assert c.precision == "auto"
 
 
 def test_early_stopping_config():

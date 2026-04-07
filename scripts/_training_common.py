@@ -6,6 +6,7 @@ Centralizes duplicated logic so that changes propagate consistently.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import os
 from itertools import islice
 from typing import Any, Callable, Dict, Optional
@@ -21,6 +22,8 @@ from training.early_stopping import EarlyStopping
 
 TRAIN_SHUFFLE_SEED_BASE: int = 90210
 """Per-epoch shuffle seed so mid-epoch resume skips the same batch order."""
+
+_ALLOWED_PRECISION = ("auto", "fp32", "bf16", "fp16")
 
 
 def save_resume_atomic(path: str, payload: dict[str, Any]) -> None:
@@ -81,6 +84,7 @@ def load_training_resume(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     stopper: EarlyStopping,
+    grad_scaler: Optional[torch.cuda.amp.GradScaler],
     script_tag: str,
 ) -> tuple[int, int, float]:
     """
@@ -102,6 +106,8 @@ def load_training_resume(
     blob = _torch_load_checkpoint(resume_path_arg, device)
     model.load_state_dict(blob["model"], strict=True)
     optimizer.load_state_dict(blob["optimizer"])
+    if grad_scaler is not None and "grad_scaler" in blob:
+        grad_scaler.load_state_dict(blob["grad_scaler"])
     best_val = float(blob.get("best_val", float("inf")))
     _apply_stopper_from_blob(stopper, blob.get("stopper") or {})
     if "full_epochs_done" in blob:
@@ -123,6 +129,36 @@ def load_training_resume(
     return full_epochs_done, batch_in_epoch, best_val
 
 
+def resolve_precision_mode(requested: str, *, device: torch.device) -> str:
+    token = str(requested).strip().lower()
+    if token not in _ALLOWED_PRECISION:
+        allowed = ", ".join(_ALLOWED_PRECISION)
+        raise ValueError(f"precision must be one of: {allowed}. Got {requested!r}.")
+
+    if token == "auto":
+        if device.type == "cuda":
+            if torch.cuda.is_bf16_supported():
+                return "bf16"
+            return "fp16"
+        return "fp32"
+
+    if token in ("bf16", "fp16") and device.type != "cuda":
+        print(
+            f"WARNING: requested precision={token} on device={device.type}; falling back to fp32.",
+            flush=True,
+        )
+        return "fp32"
+
+    return token
+
+
+def _autocast_ctx(device: torch.device, precision_mode: str):
+    if device.type != "cuda" or precision_mode == "fp32":
+        return nullcontext()
+    dtype = torch.bfloat16 if precision_mode == "bf16" else torch.float16
+    return torch.autocast(device_type="cuda", dtype=dtype)
+
+
 def run_gaussian_training_loop(
     *,
     model: nn.Module,
@@ -142,6 +178,7 @@ def run_gaussian_training_loop(
     log_batch_interval: int,
     resume_save_interval: int,
     resume_arg: Optional[str],
+    precision: str,
     script_tag: str,
     collate_fn: Any,
     extra_resume_payload: Optional[dict[str, Any]] = None,
@@ -156,6 +193,9 @@ def run_gaussian_training_loop(
     ``val_loss`` improves the caller-tracked best (caller should update best inside the callback).
     """
     extra_payload = dict(extra_resume_payload) if extra_resume_payload else {}
+    precision_mode = resolve_precision_mode(precision, device=device)
+    use_grad_scaler = device.type == "cuda" and precision_mode == "fp16"
+    grad_scaler = torch.cuda.amp.GradScaler(enabled=use_grad_scaler)
 
     full_epochs_done, batch_in_epoch, best_val = load_training_resume(
         resume_arg,
@@ -163,13 +203,15 @@ def run_gaussian_training_loop(
         optimizer=optimizer,
         device=device,
         stopper=stopper,
+        grad_scaler=grad_scaler,
         script_tag=script_tag,
     )
 
     extra = f" {log_preamble_extra}" if log_preamble_extra else " "
     print(
         f"{script_tag}: device={device}{extra}epochs={epochs} batch_size={batch_size} "
-        f"num_workers={num_workers} resume_save_interval={resume_save_interval}",
+        f"num_workers={num_workers} resume_save_interval={resume_save_interval} "
+        f"precision={precision_mode}",
         flush=True,
     )
 
@@ -203,11 +245,17 @@ def run_gaussian_training_loop(
                 print(f"  batch {batch_idx}/{n_train_batches}", flush=True)
             batch = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
             optimizer.zero_grad(set_to_none=True)
-            loss = step_loss(batch)
+            with _autocast_ctx(device, precision_mode):
+                loss = step_loss(batch)
             if not torch.isfinite(loss):
                 continue
-            loss.backward()
-            optimizer.step()
+            if use_grad_scaler:
+                grad_scaler.scale(loss).backward()
+                grad_scaler.step(optimizer)
+                grad_scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
             total_loss += float(loss.detach().cpu())
             n_batches += 1
             done_in_epoch = batch_idx + 1
@@ -222,6 +270,8 @@ def run_gaussian_training_loop(
                     "best_val": best_val,
                     "stopper": _stopper_to_dict(stopper),
                 }
+                if use_grad_scaler:
+                    payload["grad_scaler"] = grad_scaler.state_dict()
                 payload.update(extra_payload)
                 save_resume_atomic(resume_path, payload)
                 print(
@@ -236,7 +286,8 @@ def run_gaussian_training_loop(
         with torch.no_grad():
             for batch in val_loader:
                 batch = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
-                loss = step_loss(batch)
+                with _autocast_ctx(device, precision_mode):
+                    loss = step_loss(batch)
                 if torch.isfinite(loss):
                     val_loss += float(loss.cpu())
                     vn += 1
@@ -258,6 +309,8 @@ def run_gaussian_training_loop(
             "best_val": best_val,
             "stopper": _stopper_to_dict(stopper),
         }
+        if use_grad_scaler:
+            end_payload["grad_scaler"] = grad_scaler.state_dict()
         end_payload.update(extra_payload)
         save_resume_atomic(resume_path, end_payload)
 
@@ -274,6 +327,7 @@ __all__ = [
     "TRAIN_SHUFFLE_SEED_BASE",
     "build_backbone",
     "load_training_resume",
+    "resolve_precision_mode",
     "run_gaussian_training_loop",
     "save_resume_atomic",
 ]

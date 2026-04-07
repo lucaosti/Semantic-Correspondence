@@ -58,6 +58,7 @@ Use **`AML_Colab.ipynb`** at the repository root. It is self-contained and handl
 cloning, SPair-71k download, dependency installation, weight download, pipeline execution, and results analysis.
 
 Artifacts persist on Google Drive via symlinks (`runs/`, `checkpoints/`), so training resumes across Colab disconnects.
+The pipeline cell streams live logs directly in notebook output, and the notebook includes an optional stage dashboard based on `runs/logs/stage_events.jsonl`.
 
 ---
 
@@ -79,16 +80,29 @@ Artifacts persist on Google Drive via symlinks (`runs/`, `checkpoints/`), so tra
 The pipeline is configured via a YAML file or in-script constants. Key parameters:
 
 ```yaml
+runtime:
+  device: cuda
+  precision: auto
+  num_workers: -1
+
 finetune:
   last_blocks: [1, 2, 4]    # Block count sweep (PDF Stage 2)
   epochs: 50
-  batch_size: 10             # Reduce for limited VRAM
+  batch_size: 32             # Scalar fallback
+  batch_size_by_backbone:
+    dinov2_vitb14: 32
+    dinov3_vitb16: 32
+    sam_vit_b: 4
   lr: 5e-5
 lora:
   rank: 8
   alpha: 16.0
   lr: 1e-3
-  batch_size: 10
+  batch_size: 48             # Scalar fallback
+  batch_size_by_backbone:
+    dinov2_vitb14: 48
+    dinov3_vitb16: 48
+    sam_vit_b: 4
 workflow_toggles:
   run_eval_finetuned_wsa: [true, true, true]   # WSA on fine-tuned models
   run_eval_lora_wsa: [true, true, true]         # WSA on LoRA models

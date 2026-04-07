@@ -35,7 +35,7 @@ Structured stage traces append to ``runs/logs/stage_events.jsonl`` (one JSON obj
 
 **Epochs** are set by ``FT_EPOCHS`` / ``LORA_EPOCHS`` (and ``FT_PATIENCE`` / ``LORA_PATIENCE`` for early stopping) in the SHARED CONFIG block below. Training scripts also print ``epoch k/total``, periodic batch indices, and ``train_loss`` / ``val_loss`` per epoch.
 
-**Hardware:** training defaults to **batch size 100** pairs per step (Gaussian loss averages over the batch). Fine-tuning and LoRA have separate batch sizes (``FT_BATCH_SIZE`` / ``LORA_BATCH_SIZE``). Set ``DEVICE`` / ``NUM_WORKERS`` to ``None`` for adaptive defaults (CUDA → MPS → CPU). Fine-tuning sweeps over ``LAST_BLOCKS_LIST`` (e.g. ``[1, 2, 4]``) for PDF Stage 2 compliance.
+**Hardware:** training defaults to **batch size 100** pairs per step (Gaussian loss averages over the batch). Fine-tuning and LoRA have separate scalar batch sizes (``FT_BATCH_SIZE`` / ``LORA_BATCH_SIZE``) and optional per-backbone overrides (``*_BATCH_SIZE_BY_BACKBONE``). Precision is configurable through ``PRECISION`` (``auto`` / ``fp32`` / ``bf16`` / ``fp16``). Set ``DEVICE`` / ``NUM_WORKERS`` to ``None`` for adaptive defaults (CUDA → MPS → CPU). Fine-tuning sweeps over ``LAST_BLOCKS_LIST`` (e.g. ``[1, 2, 4]``) for PDF Stage 2 compliance.
 """
 
 from __future__ import annotations
@@ -129,6 +129,9 @@ LORA_EPOCHS: int = 200
 LORA_PATIENCE: int = 10
 LORA_LR: float = 1e-3
 LORA_ALPHA: float = 16.0
+PRECISION: str = "auto"
+FT_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {}
+LORA_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {}
 # Save training resume files every N batches within an epoch.
 # Lower values improve resumability on preemptible runtimes (e.g., Colab).
 RESUME_SAVE_INTERVAL: int = 100
@@ -161,6 +164,39 @@ WSA_TEMPERATURE: float = 1.0
 # =============================================================================
 
 BACKBONE_NAMES: Tuple[str, str, str] = ("dinov2_vitb14", "dinov3_vitb16", "sam_vit_b")
+_ALLOWED_PRECISION: Tuple[str, str, str, str] = ("auto", "fp32", "bf16", "fp16")
+
+
+def _normalize_precision_token(value: Any) -> str:
+    token = str(value).strip().lower()
+    if token not in _ALLOWED_PRECISION:
+        allowed = ", ".join(_ALLOWED_PRECISION)
+        raise ValueError(f"PRECISION must be one of: {allowed}. Got {value!r}.")
+    return token
+
+
+def _parse_backbone_int_map(name: str, value: Any) -> Dict[str, int]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be a mapping {{backbone_name: int}}.")
+    out: Dict[str, int] = {}
+    for k, v in value.items():
+        backbone = str(k).strip()
+        if backbone not in BACKBONE_NAMES:
+            known = ", ".join(BACKBONE_NAMES)
+            raise ValueError(f"{name} contains unknown backbone {backbone!r}. Expected one of: {known}.")
+        iv = int(v)
+        if iv < 1:
+            raise ValueError(f"{name}[{backbone!r}] must be >= 1, got {iv}.")
+        out[backbone] = iv
+    return out
+
+
+def _resolve_batch_size(stage: str, backbone: str) -> int:
+    if stage == "finetune":
+        return int(FT_BATCH_SIZE_BY_BACKBONE.get(backbone, FT_BATCH_SIZE))
+    if stage == "lora":
+        return int(LORA_BATCH_SIZE_BY_BACKBONE.get(backbone, LORA_BATCH_SIZE))
+    raise ValueError(f"Unknown stage: {stage!r}")
 
 
 def _triplet_bool(name: str, value: Any) -> Tuple[bool, bool, bool]:
@@ -202,6 +238,8 @@ def _apply_pipeline_yaml(path: Path) -> None:
     if isinstance(runtime, dict):
         if "device" in runtime:
             g["DEVICE"] = runtime["device"]
+        if runtime.get("precision") is not None:
+            g["PRECISION"] = _normalize_precision_token(runtime["precision"])
         nw = runtime.get("num_workers")
         if nw is not None:
             g["NUM_WORKERS"] = None if nw in (-1, None) else int(nw)
@@ -253,6 +291,10 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["SAM_CHECKPOINT"] = str(finetune["sam_checkpoint"])
         if finetune.get("batch_size") is not None:
             g["FT_BATCH_SIZE"] = int(finetune["batch_size"])
+        if finetune.get("batch_size_by_backbone") is not None:
+            g["FT_BATCH_SIZE_BY_BACKBONE"] = _parse_backbone_int_map(
+                "finetune.batch_size_by_backbone", finetune["batch_size_by_backbone"]
+            )
 
     lora = raw.get("lora") or {}
     if isinstance(lora, dict):
@@ -270,6 +312,10 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["LORA_BATCH_SIZE"] = int(lora["batch_size"])
         if lora.get("last_blocks") is not None:
             g["LORA_LAST_BLOCKS"] = int(lora["last_blocks"])
+        if lora.get("batch_size_by_backbone") is not None:
+            g["LORA_BATCH_SIZE_BY_BACKBONE"] = _parse_backbone_int_map(
+                "lora.batch_size_by_backbone", lora["batch_size_by_backbone"]
+            )
 
     toggles = raw.get("workflow_toggles") or {}
     if isinstance(toggles, dict):
@@ -314,10 +360,13 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "FT_LR": FT_LR,
         "FT_WEIGHT_DECAY": FT_WEIGHT_DECAY,
         "LORA_BATCH_SIZE": LORA_BATCH_SIZE,
+        "FT_BATCH_SIZE_BY_BACKBONE": dict(sorted(FT_BATCH_SIZE_BY_BACKBONE.items())),
+        "LORA_BATCH_SIZE_BY_BACKBONE": dict(sorted(LORA_BATCH_SIZE_BY_BACKBONE.items())),
         "LORA_EPOCHS": LORA_EPOCHS,
         "LORA_PATIENCE": LORA_PATIENCE,
         "LORA_LR": LORA_LR,
         "LORA_ALPHA": LORA_ALPHA,
+        "PRECISION": PRECISION,
         "RESUME_SAVE_INTERVAL": RESUME_SAVE_INTERVAL,
         "PREPROCESS": PREPROCESS,
         "IMAGE_HEIGHT": IMAGE_HEIGHT,
@@ -732,11 +781,12 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
         _validate_triplet(name, t)
 
     eff_device = DEVICE if DEVICE is not None else recommended_device_str()
+    eff_precision = _normalize_precision_token(PRECISION)
     eff_workers = NUM_WORKERS if NUM_WORKERS is not None else recommended_dataloader_workers(
         accelerator=eff_device
     )
     logger.log_line(
-        f"Adaptive hardware: device={eff_device} num_workers={eff_workers} "
+        f"Adaptive hardware: device={eff_device} precision={eff_precision} num_workers={eff_workers} "
         f"cpu_count={os.cpu_count()} platform={sys.platform}"
     )
 
@@ -817,6 +867,7 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
         "--num-workers", str(eff_workers),
         "--checkpoint-dir", CHECKPOINT_DIR,
         "--device", eff_device,
+        "--precision", eff_precision,
         "--resume-save-interval", str(RESUME_SAVE_INTERVAL),
     ])
     if DINOV2_WEIGHTS:
@@ -835,6 +886,7 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             logger.log_line("ERROR: TRAIN_FINETUNE for SAM requires SAM_CHECKPOINT.", err=True)
             return 2
         for nb in LAST_BLOCKS_LIST:
+            ft_batch_size = _resolve_batch_size("finetune", backbone)
             ft_sid = f"finetune:{backbone}:lb{nb}"
             if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), ft_sid):
                 logger.log_line(f"[SKIP] stage_id={ft_sid} reason=already_completed")
@@ -842,7 +894,7 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                 continue
             args = [
                 *base_train,
-                "--batch-size", str(FT_BATCH_SIZE),
+                "--batch-size", str(ft_batch_size),
                 "--lr", str(FT_LR),
                 "--weight-decay", str(FT_WEIGHT_DECAY),
                 "--backbone", backbone,
@@ -851,6 +903,9 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                 "--last-blocks", str(nb),
                 "--layer-indices", str(DINO_LAYER_INDICES),
             ]
+            logger.log_line(
+                f"stage_id={ft_sid} resolved batch_size={ft_batch_size} precision={eff_precision}"
+            )
             resume_file = (cwd / CHECKPOINT_DIR / f"{backbone}_lastblocks{nb}_resume.pt").resolve()
             if PIPELINE_RESUME and resume_file.is_file():
                 args.extend(["--resume", str(resume_file)])
@@ -869,6 +924,7 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
     for i, backbone in enumerate(BACKBONE_NAMES):
         if not TRAIN_LORA[i]:
             continue
+        lora_batch_size = _resolve_batch_size("lora", backbone)
         if backbone == "sam_vit_b" and not effective_sam:
             logger.log_line("ERROR: TRAIN_LORA for SAM requires SAM_CHECKPOINT.", err=True)
             return 2
@@ -879,7 +935,7 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             continue
         args = [
             *base_train,
-            "--batch-size", str(LORA_BATCH_SIZE),
+            "--batch-size", str(lora_batch_size),
             "--lr", str(LORA_LR),
             "--alpha", str(LORA_ALPHA),
             "--backbone", backbone,
@@ -889,6 +945,9 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             "--rank", str(LORA_RANK),
             "--layer-indices", str(DINO_LAYER_INDICES),
         ]
+        logger.log_line(
+            f"stage_id={lora_sid} resolved batch_size={lora_batch_size} precision={eff_precision}"
+        )
         resume_lora = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_resume.pt").resolve()
         if PIPELINE_RESUME and resume_lora.is_file():
             args.extend(["--resume", str(resume_lora)])

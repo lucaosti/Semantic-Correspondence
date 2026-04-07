@@ -35,6 +35,8 @@ class FinetuneConfig:
     dino_layer_indices:
         Which intermediate ViT layer features to use for DINO backbones (ignored for SAM).
         Default ``4`` matches training CLI and evaluation defaults.
+    precision:
+        Precision policy for training (``auto``/``fp32``/``bf16``/``fp16``).
     """
 
     backbone: str = "dinov2_vitb14"
@@ -45,6 +47,7 @@ class FinetuneConfig:
     batch_size: int = 100
     num_workers: int = 4
     dino_layer_indices: int = 4
+    precision: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,8 @@ class LoRAConfig:
     dino_layer_indices:
         Which intermediate ViT layer features to use for DINO backbones (ignored for SAM).
         Default ``4`` matches training CLI and evaluation defaults.
+    precision:
+        Precision policy for training (``auto``/``fp32``/``bf16``/``fp16``).
     """
 
     rank: int = 8
@@ -79,6 +84,7 @@ class LoRAConfig:
     batch_size: int = 100
     num_workers: int = 4
     dino_layer_indices: int = 4
+    precision: str = "auto"
 
 
 @dataclass(frozen=True)

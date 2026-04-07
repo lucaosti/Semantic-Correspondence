@@ -127,7 +127,7 @@ For batch size **B**:
 
 This is **not** multi-keypoint batching inside a single similarity matrix; it is **B independent pairs** amortized over shared forward passes.
 
-### 6.3 Batch size defaults
+### 6.3 Batch size and precision defaults
 
 Fine-tuning and LoRA have **separate** batch size controls to avoid silent overwrites.
 
@@ -136,9 +136,15 @@ Fine-tuning and LoRA have **separate** batch size controls to avoid silent overw
 | `train_finetune.py` / `train_lora.py` | `--batch-size` **100** | `--batch-size` **100** |
 | `run_pipeline.py` | `FT_BATCH_SIZE` **100** | `LORA_BATCH_SIZE` **100** |
 | `training/config.py` dataclasses | **100** | **100** |
-| Colab config (`AML_Colab.ipynb`) | **10** | **10** |
+| Colab config (`AML_Colab.ipynb`) | map: DINOv2=32, DINOv3=32, SAM=4 | map: DINOv2=48, DINOv3=48, SAM=4 |
 
-Colab uses lower batch sizes due to T4 VRAM constraints. Reduce further if you hit OOM (especially SAM at 1024×1024). **Evaluation** uses **batch size 1** for the PCK loop.
+`run_pipeline.py` also supports optional per-backbone overrides through
+`FT_BATCH_SIZE_BY_BACKBONE` and `LORA_BATCH_SIZE_BY_BACKBONE` (YAML:
+`finetune.batch_size_by_backbone`, `lora.batch_size_by_backbone`).
+When a backbone is not present in the map, the scalar fallback (`FT_BATCH_SIZE` / `LORA_BATCH_SIZE`) is used.
+
+Training precision is controlled by `PRECISION` (`auto`/`fp32`/`bf16`/`fp16`) and passed to both training scripts.
+`auto` resolves to `bf16` (or `fp16`) on CUDA and to `fp32` on non-CUDA devices. **Evaluation** uses **batch size 1** for the PCK loop.
 
 ### 6.4 Fine-tuning (last blocks) — multi-block sweep
 
@@ -207,10 +213,12 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 |--------|-----------------|-------------|
 | `LAST_BLOCKS_LIST` | `[1, 2, 4]` | Block counts for fine-tuning sweep (PDF Stage 2) |
 | `FT_BATCH_SIZE` / `LORA_BATCH_SIZE` | 100 / 100 | Separate batch sizes for fine-tune and LoRA |
+| `FT_BATCH_SIZE_BY_BACKBONE` / `LORA_BATCH_SIZE_BY_BACKBONE` | `{}` / `{}` | Optional per-backbone batch overrides |
 | `FT_LR` / `LORA_LR` | `5e-5` / `1e-3` | Learning rates |
 | `FT_WEIGHT_DECAY` | `0.01` | Weight decay for fine-tuning |
 | `LORA_ALPHA` | `16.0` | LoRA scaling factor |
 | `LORA_LAST_BLOCKS` | `2` | LoRA block count |
+| `PRECISION` | `auto` | Training precision policy (`auto`/`fp32`/`bf16`/`fp16`) |
 | `FT_EPOCHS` / `LORA_EPOCHS` | 200 | Epochs per training stage |
 | `FT_PATIENCE` / `LORA_PATIENCE` | 10 | Early stopping patience |
 | `LORA_RANK` | 8 | LoRA rank |
@@ -226,9 +234,9 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 
 **Resume:** `PIPELINE_RESUME` uses `runs/pipeline_state.json`. **`fingerprint_from_config`** hashes `_fingerprint_payload()` (all training hyperparameters, block lists, eval flags, etc.). A mismatch **clears** completed steps so incompatible runs are not mixed.
 
-**YAML `--config`:** `_apply_pipeline_yaml` maps sections into module globals. Fine-tuning and LoRA have **separate** batch size fields (`finetune.batch_size` → `FT_BATCH_SIZE`, `lora.batch_size` → `LORA_BATCH_SIZE`); they no longer share a single variable. The `finetune.last_blocks` field accepts either a single integer or a list.
+**YAML `--config`:** `_apply_pipeline_yaml` maps sections into module globals. Fine-tuning and LoRA have **separate** scalar batch size fields (`finetune.batch_size` → `FT_BATCH_SIZE`, `lora.batch_size` → `LORA_BATCH_SIZE`) plus optional per-backbone maps (`finetune.batch_size_by_backbone`, `lora.batch_size_by_backbone`). Precision is configured through `runtime.precision` → `PRECISION`. The `finetune.last_blocks` field accepts either a single integer or a list.
 
-**Colab overrides:** The Colab notebook writes `config.yaml` with reduced values suitable for T4 GPU: `batch_size: 10`, `epochs: 50`, `patience: 7`. These differ from the in-script defaults (100/200/10) intentionally — see §10.
+**Colab overrides:** The Colab notebook writes `config.yaml` with `runtime.precision: auto`, scalar fallback batch sizes, per-backbone batch maps, and reduced schedules (`epochs: 50`, `patience: 7`) compared to in-script defaults. This balances throughput and stability on constrained Colab sessions while keeping SAM conservative.
 
 ### 8.3 Environment variables
 
@@ -259,11 +267,12 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 ## 10. Notebook and config file
 
 - **`AML_Colab.ipynb`:** the sole entry point for running the full pipeline. It runs end-to-end on Google Colab (clone repo, download + extract SPair-71k, download pretrained weights, write `config.yaml`, run the pipeline). Includes post-pipeline analysis cells: aggregate PCK table, multi-block comparison plot, per-category heatmap, per-difficulty breakdown, and qualitative keypoint visualizations.
-- **Colab-specific overrides:** the notebook writes `config.yaml` with reduced training parameters (`batch_size: 10`, `epochs: 50`, `patience: 7`) compared to the pipeline defaults (100/200/10). This is intentional: Colab T4 GPUs have 16GB VRAM and limited session time. The pipeline resume mechanism and Google Drive symlinks handle disconnects.
+- **Colab-specific overrides:** the notebook writes `config.yaml` with `runtime.precision: auto`, scalar fallback batch sizes, and per-backbone batch maps (`finetune.batch_size_by_backbone`, `lora.batch_size_by_backbone`) alongside `epochs: 50` and `patience: 7`. These values are tuned for better GPU utilization while keeping SAM conservative.
 - **`config.yaml`:** notebook-generated pipeline configuration. It contains machine-specific absolute paths, so it is **not tracked in git** (see `.gitignore`). The notebook writes it for `scripts/run_pipeline.py --config config.yaml`.
 - **YAML reader:** the pipeline applies keys via `_apply_pipeline_yaml` in `run_pipeline.py` (``dataset``, ``workflow_toggles``, etc.). Key runtime overrides include `runtime.dino_layer_indices` → `DINO_LAYER_INDICES` (int, default 4): intermediate ViT layer for DINO feature extraction.
 - **SPair-71k download URL (Colab):** `https://cvlab.postech.ac.kr/research/SPair-71k/data/SPair-71k.tar.gz`
-- **Pipeline reset (Colab):** in `AML_Colab.ipynb`, the code cell under **§8. Write config.yaml** sets `START_FROM_SCRATCH` (default `False`). The **§9. Run pipeline** cell runs `scripts/run_pipeline.py` via `subprocess.run` and passes **`SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1`** in the child `env` when the flag is true (clears `runs/pipeline_state.json` bookkeeping only; does not delete checkpoints on Drive). When false, that key is omitted from the subprocess environment.
+- **Pipeline reset (Colab):** in `AML_Colab.ipynb`, the code cell under **§8. Write config.yaml** sets `START_FROM_SCRATCH` (default `False`). The **§9. Run pipeline** cell launches `scripts/run_pipeline.py` via `subprocess.Popen` with line-by-line streaming to notebook output, and passes **`SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1`** in the child `env` when the flag is true (clears `runs/pipeline_state.json` bookkeeping only; does not delete checkpoints on Drive). When false, that key is omitted from the subprocess environment.
+- **Colab stage dashboard:** the notebook includes an optional helper (`show_stage_dashboard`) that reads `runs/logs/stage_events.jsonl` and displays recent structured stage events.
 - **Qualitative cell (§15):** the DINOv2 demo uses `DenseExtractorConfig(..., dinov2_weights_path=...)` pointing at `checkpoints/dinov2_vitb14_pretrain.pth` so visualization does not rely on `torch.hub` downloads.
 
 ---

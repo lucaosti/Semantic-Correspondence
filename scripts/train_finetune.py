@@ -86,6 +86,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     p.add_argument("--device", type=str, default=None)
     p.add_argument(
+        "--precision",
+        type=str,
+        default="auto",
+        choices=["auto", "fp32", "bf16", "fp16"],
+        help="Training precision policy. 'auto' picks bf16/fp16 on CUDA and fp32 otherwise.",
+    )
+    p.add_argument(
         "--log-batch-interval",
         type=int,
         default=2500,
@@ -204,6 +211,7 @@ def main() -> int:
         log_batch_interval=args.log_batch_interval,
         resume_save_interval=args.resume_save_interval,
         resume_arg=args.resume,
+        precision=args.precision,
         script_tag="train_finetune",
         collate_fn=spair_collate_fn,
         extra_resume_payload=None,
