@@ -155,7 +155,7 @@ def run_gaussian_training_loop(
     ``save_best_checkpoint(epoch, val_loss)`` is called every epoch after validation when
     ``val_loss`` improves the caller-tracked best (caller should update best inside the callback).
     """
-    extra = dict(extra_resume_payload) if extra_resume_payload else {}
+    extra_payload = dict(extra_resume_payload) if extra_resume_payload else {}
 
     full_epochs_done, batch_in_epoch, best_val = load_training_resume(
         resume_arg,
@@ -222,7 +222,7 @@ def run_gaussian_training_loop(
                     "best_val": best_val,
                     "stopper": _stopper_to_dict(stopper),
                 }
-                payload.update(extra)
+                payload.update(extra_payload)
                 save_resume_atomic(resume_path, payload)
                 print(
                     f"{script_tag}: saved resume checkpoint (batch_in_epoch={done_in_epoch}/{n_train_batches}) -> {resume_path}",
@@ -258,7 +258,7 @@ def run_gaussian_training_loop(
             "best_val": best_val,
             "stopper": _stopper_to_dict(stopper),
         }
-        end_payload.update(extra)
+        end_payload.update(extra_payload)
         save_resume_atomic(resume_path, end_payload)
 
         if stopper.step(val_loss, epoch):

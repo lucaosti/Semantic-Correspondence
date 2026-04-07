@@ -31,7 +31,7 @@ from models.common.lora import (
 from scripts._training_common import build_backbone, run_gaussian_training_loop
 from training.early_stopping import EarlyStopping
 from training.engine import correspondence_gaussian_loss_dino_vit, correspondence_gaussian_loss_sam
-from training.unfreeze import freeze_all
+from training.unfreeze import freeze_all, unfreeze_parameters
 from utils.hardware import (
     apply_accelerator_throughput_tweaks,
     dataloader_extra_kwargs,
@@ -76,6 +76,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--height", type=int, default=784, help="Must be divisible by backbone patch size (e.g. 784 for ViT-B/14 and /16).")
     p.add_argument("--width", type=int, default=784)
     p.add_argument("--patience", type=int, default=3)
+    p.add_argument(
+        "--layer-indices",
+        type=int,
+        default=4,
+        help="Intermediate ViT layer for DINO feature extraction (ignored for sam_vit_b).",
+    )
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     p.add_argument("--device", type=str, default=None)
     p.add_argument(
@@ -140,8 +146,7 @@ def main() -> int:
             rank=args.rank,
             alpha=args.alpha,
         )
-    for p in lora_params:
-        p.requires_grad = True
+    unfreeze_parameters(lora_params)
 
     opt = torch.optim.AdamW(lora_params, lr=args.lr, weight_decay=0.0)
 
@@ -176,7 +181,7 @@ def main() -> int:
         **dl_kw,
     )
 
-    layer_indices = 4
+    layer_indices = args.layer_indices
     use_sam = args.backbone == "sam_vit_b"
 
     def _step_loss(batch_tensors: dict) -> torch.Tensor:

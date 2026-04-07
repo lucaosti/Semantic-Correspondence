@@ -32,6 +32,9 @@ class FinetuneConfig:
         Pairs per optimizer step (loss is averaged over the batch). Default matches training CLIs.
     num_workers:
         DataLoader workers (CLI scripts use ``-1`` for host-aware defaults in ``utils.hardware``).
+    dino_layer_indices:
+        Which intermediate ViT layer features to use for DINO backbones (ignored for SAM).
+        Default ``4`` matches training CLI and evaluation defaults.
     """
 
     backbone: str = "dinov2_vitb14"
@@ -41,6 +44,7 @@ class FinetuneConfig:
     max_epochs: int = 50
     batch_size: int = 100
     num_workers: int = 4
+    dino_layer_indices: int = 4
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,9 @@ class LoRAConfig:
         Pairs per optimizer step (loss is averaged over the batch). Default matches training CLIs.
     num_workers:
         DataLoader workers (CLI scripts use ``-1`` for host-aware defaults in ``utils.hardware``).
+    dino_layer_indices:
+        Which intermediate ViT layer features to use for DINO backbones (ignored for SAM).
+        Default ``4`` matches training CLI and evaluation defaults.
     """
 
     rank: int = 8
@@ -71,6 +78,7 @@ class LoRAConfig:
     learning_rate: float = 1e-3
     batch_size: int = 100
     num_workers: int = 4
+    dino_layer_indices: int = 4
 
 
 @dataclass(frozen=True)

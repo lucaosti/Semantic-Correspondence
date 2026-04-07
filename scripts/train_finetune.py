@@ -77,6 +77,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--height", type=int, default=784, help="Must be divisible by backbone patch size (e.g. 784 for ViT-B/14 and /16).")
     p.add_argument("--width", type=int, default=784)
     p.add_argument("--patience", type=int, default=5)
+    p.add_argument(
+        "--layer-indices",
+        type=int,
+        default=4,
+        help="Intermediate ViT layer for DINO feature extraction (ignored for sam_vit_b).",
+    )
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     p.add_argument("--device", type=str, default=None)
     p.add_argument(
@@ -168,7 +174,7 @@ def main() -> int:
         args.checkpoint_dir, f"{args.backbone}_lastblocks{args.last_blocks}_resume.pt"
     )
 
-    layer_indices = 4
+    layer_indices = args.layer_indices
     use_sam = args.backbone == "sam_vit_b"
 
     def _step_loss(batch_tensors: dict) -> torch.Tensor:

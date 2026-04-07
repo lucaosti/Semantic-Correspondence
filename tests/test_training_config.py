@@ -10,6 +10,7 @@ def test_finetune_config_defaults():
     assert c.backbone == "dinov2_vitb14"
     assert c.batch_size == 100
     assert c.last_blocks == 2
+    assert c.dino_layer_indices == 4
 
 
 def test_lora_config_defaults():
@@ -17,6 +18,7 @@ def test_lora_config_defaults():
     assert c.rank == 8
     assert c.alpha == 16.0
     assert c.target == "mlp"
+    assert c.dino_layer_indices == 4
 
 
 def test_early_stopping_config():

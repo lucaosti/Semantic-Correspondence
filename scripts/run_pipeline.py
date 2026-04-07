@@ -135,6 +135,8 @@ RESUME_SAVE_INTERVAL: int = 100
 # Training scripts print batch progress every N steps (0 = epoch summaries only).
 # Lower on CPU-only hosts so logs/dashboard move often (each step is slow).
 LOG_BATCH_INTERVAL: int = 100
+# Intermediate ViT layer for DINO feature extraction (passed as --layer-indices to training scripts).
+DINO_LAYER_INDICES: int = 4
 PREPROCESS: str = "FIXED_RESIZE"
 # Multiples of ViT patch sizes used here (14 and 16): ``784 = 56*14 = 49*16``.
 IMAGE_HEIGHT: int = 784
@@ -222,6 +224,8 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["LOG_BATCH_INTERVAL"] = int(runtime["log_batch_interval"])
         if runtime.get("resume_save_interval") is not None:
             g["RESUME_SAVE_INTERVAL"] = int(runtime["resume_save_interval"])
+        if runtime.get("dino_layer_indices") is not None:
+            g["DINO_LAYER_INDICES"] = int(runtime["dino_layer_indices"])
         if runtime.get("eval_split") is not None:
             g["EVAL_SPLIT"] = str(runtime["eval_split"])
 
@@ -319,6 +323,7 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "IMAGE_HEIGHT": IMAGE_HEIGHT,
         "IMAGE_WIDTH": IMAGE_WIDTH,
         "LOG_BATCH_INTERVAL": LOG_BATCH_INTERVAL,
+        "DINO_LAYER_INDICES": DINO_LAYER_INDICES,
         "DINOV2_WEIGHTS": DINOV2_WEIGHTS,
         "DINOV3_WEIGHTS": DINOV3_WEIGHTS,
         "SAM_CHECKPOINT": SAM_CHECKPOINT,
@@ -844,6 +849,7 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                 "--epochs", str(FT_EPOCHS),
                 "--patience", str(FT_PATIENCE),
                 "--last-blocks", str(nb),
+                "--layer-indices", str(DINO_LAYER_INDICES),
             ]
             resume_file = (cwd / CHECKPOINT_DIR / f"{backbone}_lastblocks{nb}_resume.pt").resolve()
             if PIPELINE_RESUME and resume_file.is_file():
@@ -881,6 +887,7 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             "--patience", str(LORA_PATIENCE),
             "--last-blocks", str(LORA_LAST_BLOCKS),
             "--rank", str(LORA_RANK),
+            "--layer-indices", str(DINO_LAYER_INDICES),
         ]
         resume_lora = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_resume.pt").resolve()
         if PIPELINE_RESUME and resume_lora.is_file():

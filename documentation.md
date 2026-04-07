@@ -220,6 +220,7 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 | `EVAL_LIMIT` | 0 (full split) | Pair limit for debugging |
 | `LOG_BATCH_INTERVAL` | 100 | Batch logging frequency |
 | `RESUME_SAVE_INTERVAL` | 100 | Mid-epoch resume checkpoint cadence |
+| `DINO_LAYER_INDICES` | `4` | Intermediate ViT layer for DINO feature extraction (passed as `--layer-indices`; ignored for SAM) |
 
 **Workflow toggles:** In addition to baseline and checkpoint eval toggles, `RUN_EVAL_FINETUNED_WSA` and `RUN_EVAL_LORA_WSA` enable WSA evaluation on trained checkpoints (PDF Stage 3 combined with Stages 2 and 4).
 
@@ -260,7 +261,7 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 - **`AML_Colab.ipynb`:** the sole entry point for running the full pipeline. It runs end-to-end on Google Colab (clone repo, download + extract SPair-71k, download pretrained weights, write `config.yaml`, run the pipeline). Includes post-pipeline analysis cells: aggregate PCK table, multi-block comparison plot, per-category heatmap, per-difficulty breakdown, and qualitative keypoint visualizations.
 - **Colab-specific overrides:** the notebook writes `config.yaml` with reduced training parameters (`batch_size: 10`, `epochs: 50`, `patience: 7`) compared to the pipeline defaults (100/200/10). This is intentional: Colab T4 GPUs have 16GB VRAM and limited session time. The pipeline resume mechanism and Google Drive symlinks handle disconnects.
 - **`config.yaml`:** notebook-generated pipeline configuration. It contains machine-specific absolute paths, so it is **not tracked in git** (see `.gitignore`). The notebook writes it for `scripts/run_pipeline.py --config config.yaml`.
-- **YAML reader:** the pipeline applies keys via `_apply_pipeline_yaml` in `run_pipeline.py` (``dataset``, ``workflow_toggles``, etc.).
+- **YAML reader:** the pipeline applies keys via `_apply_pipeline_yaml` in `run_pipeline.py` (``dataset``, ``workflow_toggles``, etc.). Key runtime overrides include `runtime.dino_layer_indices` → `DINO_LAYER_INDICES` (int, default 4): intermediate ViT layer for DINO feature extraction.
 - **SPair-71k download URL (Colab):** `https://cvlab.postech.ac.kr/research/SPair-71k/data/SPair-71k.tar.gz`
 - **Pipeline reset (Colab):** in `AML_Colab.ipynb`, the code cell under **§8. Write config.yaml** sets `START_FROM_SCRATCH` (default `False`). The **§9. Run pipeline** cell runs `scripts/run_pipeline.py` via `subprocess.run` and passes **`SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1`** in the child `env` when the flag is true (clears `runs/pipeline_state.json` bookkeeping only; does not delete checkpoints on Drive). When false, that key is omitted from the subprocess environment.
 - **Qualitative cell (§15):** the DINOv2 demo uses `DenseExtractorConfig(..., dinov2_weights_path=...)` pointing at `checkpoints/dinov2_vitb14_pretrain.pth` so visualization does not rely on `torch.hub` downloads.
@@ -293,7 +294,7 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-Coverage includes dataset workers, pipeline state, smoke imports, backbone construction, SD4Match interface, window soft-argmax, cosine matching / argmax correspondence, LoRA adapters, PCK helpers, preprocessing/keypoint scaling, ViT unfreezing, and training config dataclasses. Tests do **not** guarantee numerical results on full SPair training.
+Coverage includes dataset workers, pipeline state, smoke imports, backbone construction, SD4Match interface, window soft-argmax, cosine matching / argmax correspondence, LoRA adapters, PCK helpers, preprocessing/keypoint scaling, ViT unfreezing, and training config dataclasses. Tests do **not** guarantee numerical results on full SPair training. After each run, `tests/conftest.py` generates `docs/test_report.md` (replacing any prior version) with a per-file Markdown table of results, durations, and failure details.
 
 ---
 
