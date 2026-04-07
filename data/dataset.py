@@ -911,11 +911,12 @@ class SPair71kPairDataset(Dataset):
             return out
 
         if self.preprocess == PreprocessMode.SCALE_LONGEST_ROUND:
-            if "scale" not in meta:
-                raise KeyError("Expected 'scale' in meta for SCALE_LONGEST_ROUND bbox mapping.")
-            s = float(meta["scale"])
-            out[0::2] *= s
-            out[1::2] *= s
+            if "out_hw" not in meta or "orig_wh" not in meta:
+                raise KeyError("Expected 'out_hw' and 'orig_wh' in meta for SCALE_LONGEST_ROUND bbox mapping.")
+            final_h, final_w = meta["out_hw"]
+            orig_w, orig_h = meta["orig_wh"]
+            out[0::2] *= float(final_w) / float(orig_w)
+            out[1::2] *= float(final_h) / float(orig_h)
             return out
 
         if self.preprocess == PreprocessMode.LETTERBOX_PATCH_GRID:
