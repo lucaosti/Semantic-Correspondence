@@ -243,6 +243,10 @@ def main() -> int:
         save_best_checkpoint=_save_best,
         epoch_log_suffix=_epoch_suffix,
         log_preamble_extra=f"backbone={args.backbone} ",
+        history_path=os.path.join(
+            args.checkpoint_dir,
+            f"{args.backbone}_lora_r{args.rank}_history.jsonl",
+        ),
     )
     return 0
 

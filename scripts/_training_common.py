@@ -6,6 +6,7 @@ Centralizes duplicated logic so that changes propagate consistently.
 
 from __future__ import annotations
 
+import json as _json
 from contextlib import nullcontext
 import os
 from itertools import islice
@@ -185,6 +186,7 @@ def run_gaussian_training_loop(
     save_best_checkpoint: Callable[[int, float], None],
     epoch_log_suffix: Optional[Callable[[], str]] = None,
     log_preamble_extra: str = "",
+    history_path: Optional[str] = None,
 ) -> None:
     """
     Shared train/val loop with mid-epoch resume, periodic resume saves, early stopping.
@@ -295,6 +297,15 @@ def run_gaussian_training_loop(
 
         suffix = epoch_log_suffix() if epoch_log_suffix else ""
         print(f"epoch={epoch} train_loss={train_loss:.6f} val_loss={val_loss:.6f}{suffix}")
+
+        if history_path is not None:
+            record = {
+                "epoch": epoch,
+                "train_loss": round(train_loss, 6),
+                "val_loss": round(val_loss, 6),
+            }
+            with open(history_path, "a", encoding="utf-8") as _hf:
+                _hf.write(_json.dumps(record) + "\n")
 
         if val_loss < best_val:
             best_val = val_loss
