@@ -170,7 +170,7 @@ def build_eval_dataloader(
     split: str,
     *,
     batch_size: int = 1,
-    num_workers: int = -1,
+    num_workers: int = 1,
     preprocess: str = "fixed_resize",
     output_size_hw: Tuple[int, int] = (784, 784),
     pin_memory: Optional[bool] = None,

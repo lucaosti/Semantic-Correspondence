@@ -69,8 +69,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--num-workers",
         type=int,
-        default=-1,
-        help="DataLoader workers (-1 = auto from CPU count and OS).",
+        default=1,
+        help="DataLoader workers (1 = safe default; -1 = auto from CPU count and OS).",
     )
     p.add_argument("--preprocess", type=str, default="FIXED_RESIZE")
     p.add_argument("--height", type=int, default=784, help="Input height; must be divisible by patch size. Recommended: DINOv2→518, DINOv3/SAM→512. Fallback: 784.")

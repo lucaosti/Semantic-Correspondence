@@ -27,11 +27,11 @@ def test_recommended_workers_windows(monkeypatch):
 
 
 def test_recommended_workers_mps(monkeypatch):
-    """MPS/macOS path: returns 4–24 workers."""
+    """MPS/macOS path: returns 1 (conservative for unified memory)."""
     monkeypatch.setattr("sys.platform", "darwin")
     monkeypatch.setattr("os.cpu_count", lambda: 10)
     workers = recommended_dataloader_workers(accelerator="mps")
-    assert 4 <= workers <= 24
+    assert workers == 1
 
 
 def test_recommended_workers_cpu(monkeypatch):

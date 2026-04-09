@@ -45,7 +45,7 @@ class FinetuneConfig:
     weight_decay: float = 0.01
     max_epochs: int = 50
     batch_size: int = 20
-    num_workers: int = -1
+    num_workers: int = 1
     dino_layer_indices: int = 4
     precision: str = "auto"
 
@@ -82,7 +82,7 @@ class LoRAConfig:
     max_epochs: int = 50
     learning_rate: float = 1e-3
     batch_size: int = 20
-    num_workers: int = -1
+    num_workers: int = 1
     dino_layer_indices: int = 4
     precision: str = "auto"
 

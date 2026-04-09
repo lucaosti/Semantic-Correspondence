@@ -55,7 +55,10 @@ def recommended_dataloader_workers(
         return int(max(2, capped))
 
     if acc == "mps" or sys.platform == "darwin":
-        return int(max(4, min(24, n - 2)))
+        # macOS unified memory: each worker is a separate process that maps the full dataset
+        # and model weights; with MPS the address space is shared with the GPU, so more than
+        # one worker quickly exhausts RAM on typical Apple Silicon configs.
+        return 1
 
     if sys.platform == "win32":
         # Windows uses spawn for DataLoader workers; conservative cap reduces overhead.
