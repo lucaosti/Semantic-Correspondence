@@ -482,6 +482,9 @@ def _python(cwd: Path) -> str:
 
 def _run_cmd(cwd: Path, cmd: List[str], logger: PipelineLogger) -> int:
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    # Keep project root importable for script-style subprocess execution.
+    prev_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = f"{cwd}{os.pathsep}{prev_pythonpath}" if prev_pythonpath else str(cwd)
     logger.log_line(f"--- Running: {' '.join(cmd)}")
     p = subprocess.Popen(
         cmd,
