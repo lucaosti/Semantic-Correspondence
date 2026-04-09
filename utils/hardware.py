@@ -57,6 +57,10 @@ def recommended_dataloader_workers(
     if acc == "mps" or sys.platform == "darwin":
         return int(max(4, min(24, n - 2)))
 
+    if sys.platform == "win32":
+        # Windows uses spawn for DataLoader workers; conservative cap reduces overhead.
+        return int(max(2, min(4, max(1, n // 2))))
+
     # CPU training: main process does forward/backward; workers only load/decode.
     io_workers = max(2, n // 4)
     return int(max(2, min(16, min(cpu_worker_cap, io_workers))))
@@ -171,4 +175,6 @@ def dataloader_extra_kwargs(num_workers: int, *, for_device: str = "cuda") -> di
         cap = max(4, min(48, cap))
         want = max(5, min(cap, nw // 2 + 2))
         prefetch = max(4, want)
-    return {"persistent_workers": True, "prefetch_factor": prefetch}
+    # On Windows, persistent workers with spawn can leave zombie processes on abrupt exit.
+    persistent = sys.platform != "win32"
+    return {"persistent_workers": persistent, "prefetch_factor": prefetch}

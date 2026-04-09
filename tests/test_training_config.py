@@ -8,7 +8,7 @@ from training.config import EarlyStoppingConfig, FinetuneConfig, LoRAConfig, Tra
 def test_finetune_config_defaults():
     c = FinetuneConfig()
     assert c.backbone == "dinov2_vitb14"
-    assert c.batch_size == 100
+    assert c.batch_size == 20
     assert c.last_blocks == 2
     assert c.dino_layer_indices == 4
     assert c.precision == "auto"

@@ -35,7 +35,7 @@ Structured stage traces append to ``runs/logs/stage_events.jsonl`` (one JSON obj
 
 **Epochs** are set by ``FT_EPOCHS`` / ``LORA_EPOCHS`` (and ``FT_PATIENCE`` / ``LORA_PATIENCE`` for early stopping) in the SHARED CONFIG block below. Training scripts also print ``epoch k/total``, periodic batch indices, and ``train_loss`` / ``val_loss`` per epoch.
 
-**Hardware:** training defaults to **batch size 100** pairs per step (Gaussian loss averages over the batch). Fine-tuning and LoRA have separate scalar batch sizes (``FT_BATCH_SIZE`` / ``LORA_BATCH_SIZE``) and optional per-backbone overrides (``*_BATCH_SIZE_BY_BACKBONE``). Precision is configurable through ``PRECISION`` (``auto`` / ``fp32`` / ``bf16`` / ``fp16``). Set ``DEVICE`` / ``NUM_WORKERS`` to ``None`` for adaptive defaults (CUDA → MPS → CPU). Fine-tuning sweeps over ``LAST_BLOCKS_LIST`` (e.g. ``[1, 2, 4]``) for PDF Stage 2 compliance.
+**Hardware:** training defaults to **batch size 20** pairs per step for DINO backbones (SAM uses 4 via ``FT_BATCH_SIZE_BY_BACKBONE`` / ``LORA_BATCH_SIZE_BY_BACKBONE``). Precision is configurable through ``PRECISION`` (``auto`` / ``fp32`` / ``bf16`` / ``fp16``). Set ``DEVICE`` / ``NUM_WORKERS`` to ``None`` for adaptive defaults (CUDA → MPS → CPU; Windows num_workers auto-capped). Fine-tuning sweeps over ``LAST_BLOCKS_LIST`` (e.g. ``[1, 2, 4]``) for PDF Stage 2 compliance.
 """
 
 from __future__ import annotations
@@ -119,19 +119,20 @@ DINOV3_WEIGHTS: Optional[str] = None
 SAM_CHECKPOINT: Optional[str] = str(_SAM_VIT_B_DEFAULT) if _SAM_VIT_B_DEFAULT.is_file() else None
 
 # Training hyperparameters (passed through to ``train_finetune.py`` / ``train_lora.py``).
-FT_BATCH_SIZE: int = 100
-FT_EPOCHS: int = 200
-FT_PATIENCE: int = 10
+FT_BATCH_SIZE: int = 20
+FT_EPOCHS: int = 50
+FT_PATIENCE: int = 7
 FT_LR: float = 5e-5
 FT_WEIGHT_DECAY: float = 0.01
-LORA_BATCH_SIZE: int = 100
-LORA_EPOCHS: int = 200
-LORA_PATIENCE: int = 10
+LORA_BATCH_SIZE: int = 20
+LORA_EPOCHS: int = 50
+LORA_PATIENCE: int = 7
 LORA_LR: float = 1e-3
 LORA_ALPHA: float = 16.0
 PRECISION: str = "auto"
-FT_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {}
-LORA_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {}
+# SAM encoder is VRAM-heavy even at 512×512 input; keep its batch at 4.
+FT_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {"sam_vit_b": 4}
+LORA_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {"sam_vit_b": 4}
 # Save training resume files every N batches within an epoch.
 # Lower values improve resumability on preemptible runtimes (e.g., Colab).
 RESUME_SAVE_INTERVAL: int = 100
@@ -141,7 +142,15 @@ LOG_BATCH_INTERVAL: int = 100
 # Intermediate ViT layer for DINO feature extraction (passed as --layer-indices to training scripts).
 DINO_LAYER_INDICES: int = 4
 PREPROCESS: str = "FIXED_RESIZE"
-# Multiples of ViT patch sizes used here (14 and 16): ``784 = 56*14 = 49*16``.
+# Per-backbone image sizes: exact multiples of each backbone's patch size.
+# DINOv2 patch=14: 518 = 37×14. DINOv3 patch=16: 512 = 32×16. SAM patch=16: 512 (features always
+# extracted at 1024×1024 internally by SAM's encoder regardless of dataset input size).
+IMAGE_SIZE_BY_BACKBONE: Dict[str, Tuple[int, int]] = {
+    "dinov2_vitb14": (518, 518),
+    "dinov3_vitb16": (512, 512),
+    "sam_vit_b": (512, 512),
+}
+# Global fallback for backbones not listed in IMAGE_SIZE_BY_BACKBONE (784 = 56×14 = 49×16).
 IMAGE_HEIGHT: int = 784
 IMAGE_WIDTH: int = 784
 # ``None`` → :func:`utils.hardware.recommended_dataloader_workers`
@@ -189,6 +198,13 @@ def _parse_backbone_int_map(name: str, value: Any) -> Dict[str, int]:
             raise ValueError(f"{name}[{backbone!r}] must be >= 1, got {iv}.")
         out[backbone] = iv
     return out
+
+
+def _resolve_image_hw(backbone: str) -> Tuple[int, int]:
+    """Return ``(height, width)`` for ``backbone``, using per-backbone override or global fallback."""
+    if backbone in IMAGE_SIZE_BY_BACKBONE:
+        return IMAGE_SIZE_BY_BACKBONE[backbone]
+    return (IMAGE_HEIGHT, IMAGE_WIDTH)
 
 
 def _resolve_batch_size(stage: str, backbone: str) -> int:
@@ -249,6 +265,23 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["IMAGE_HEIGHT"] = int(runtime["image_height"])
         if runtime.get("image_width") is not None:
             g["IMAGE_WIDTH"] = int(runtime["image_width"])
+        if runtime.get("image_size_by_backbone") is not None:
+            raw_map = runtime["image_size_by_backbone"]
+            if isinstance(raw_map, dict):
+                current = dict(g.get("IMAGE_SIZE_BY_BACKBONE", {}))
+                for k, v in raw_map.items():
+                    backbone_k = str(k).strip()
+                    if backbone_k not in BACKBONE_NAMES:
+                        raise ValueError(
+                            f"runtime.image_size_by_backbone: unknown backbone {backbone_k!r}. "
+                            f"Expected one of: {', '.join(BACKBONE_NAMES)}."
+                        )
+                    if not (isinstance(v, (list, tuple)) and len(v) == 2):
+                        raise ValueError(
+                            f"runtime.image_size_by_backbone[{backbone_k!r}] must be [h, w], got {v!r}."
+                        )
+                    current[backbone_k] = (int(v[0]), int(v[1]))
+                g["IMAGE_SIZE_BY_BACKBONE"] = current
         if runtime.get("limit_pairs") is not None:
             g["EVAL_LIMIT"] = int(runtime["limit_pairs"])
         if runtime.get("alphas") is not None:
@@ -369,6 +402,7 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "PRECISION": PRECISION,
         "RESUME_SAVE_INTERVAL": RESUME_SAVE_INTERVAL,
         "PREPROCESS": PREPROCESS,
+        "IMAGE_SIZE_BY_BACKBONE": {k: list(v) for k, v in sorted(IMAGE_SIZE_BY_BACKBONE.items())},
         "IMAGE_HEIGHT": IMAGE_HEIGHT,
         "IMAGE_WIDTH": IMAGE_WIDTH,
         "LOG_BATCH_INTERVAL": LOG_BATCH_INTERVAL,
@@ -539,6 +573,7 @@ def _build_eval_specs(
     triples: List[Tuple[str, int]] = list(zip(BACKBONE_NAMES, range(3)))
 
     def _base_kwargs(backbone: str) -> Dict[str, Any]:
+        h, w = _resolve_image_hw(backbone)
         return dict(
             backbone=backbone,
             split=EVAL_SPLIT,
@@ -549,8 +584,8 @@ def _build_eval_specs(
             sam_checkpoint=sam_checkpoint,
             limit=EVAL_LIMIT,
             preprocess=PREPROCESS,
-            height=IMAGE_HEIGHT,
-            width=IMAGE_WIDTH,
+            height=h,
+            width=w,
             num_workers=num_workers,
         )
 
@@ -865,8 +900,6 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
         base_train.extend(["--spair-root", SPAIR_ROOT])
     base_train.extend([
         "--preprocess", PREPROCESS,
-        "--height", str(IMAGE_HEIGHT),
-        "--width", str(IMAGE_WIDTH),
         "--num-workers", str(eff_workers),
         "--checkpoint-dir", CHECKPOINT_DIR,
         "--device", eff_device,
@@ -895,8 +928,11 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                 logger.log_line(f"[SKIP] stage_id={ft_sid} reason=already_completed")
                 _trace_stage(cwd, logger, "skip", ft_sid, reason="already_completed")
                 continue
+            ft_h, ft_w = _resolve_image_hw(backbone)
             args = [
                 *base_train,
+                "--height", str(ft_h),
+                "--width", str(ft_w),
                 "--batch-size", str(ft_batch_size),
                 "--lr", str(FT_LR),
                 "--weight-decay", str(FT_WEIGHT_DECAY),
@@ -936,8 +972,11 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             logger.log_line(f"[SKIP] stage_id={lora_sid} reason=already_completed")
             _trace_stage(cwd, logger, "skip", lora_sid, reason="already_completed")
             continue
+        lora_h, lora_w = _resolve_image_hw(backbone)
         args = [
             *base_train,
+            "--height", str(lora_h),
+            "--width", str(lora_w),
             "--batch-size", str(lora_batch_size),
             "--lr", str(LORA_LR),
             "--alpha", str(LORA_ALPHA),

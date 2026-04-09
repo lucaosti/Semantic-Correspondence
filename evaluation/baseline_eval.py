@@ -170,7 +170,7 @@ def build_eval_dataloader(
     split: str,
     *,
     batch_size: int = 1,
-    num_workers: int = 4,
+    num_workers: int = -1,
     preprocess: str = "fixed_resize",
     output_size_hw: Tuple[int, int] = (784, 784),
     pin_memory: Optional[bool] = None,
@@ -190,8 +190,12 @@ def build_eval_dataloader(
     pin_memory:
         If ``None``, enables pinned memory when CUDA is available (legacy default).
     """
+    from utils.hardware import pin_memory_for, resolve_num_workers
+    if num_workers < 0:
+        num_workers = resolve_num_workers(num_workers)
     if pin_memory is None:
-        pin_memory = torch.cuda.is_available()
+        _dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        pin_memory = pin_memory_for(_dev)
     if dataset_backend == "native":
         from data.dataset import PreprocessMode
 

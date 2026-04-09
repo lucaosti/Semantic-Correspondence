@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--batch-size",
         type=int,
-        default=100,
+        default=20,
         help="Pairs per optimizer step (Gaussian loss averages over the batch).",
     )
     p.add_argument("--lr", type=float, default=5e-5)
@@ -74,9 +74,9 @@ def parse_args() -> argparse.Namespace:
         help="DataLoader workers (-1 = auto from CPU count and OS).",
     )
     p.add_argument("--preprocess", type=str, default="FIXED_RESIZE")
-    p.add_argument("--height", type=int, default=784, help="Must be divisible by backbone patch size (e.g. 784 for ViT-B/14 and /16).")
+    p.add_argument("--height", type=int, default=784, help="Input height; must be divisible by patch size. Recommended: DINOv2→518, DINOv3/SAM→512. Fallback: 784.")
     p.add_argument("--width", type=int, default=784)
-    p.add_argument("--patience", type=int, default=5)
+    p.add_argument("--patience", type=int, default=7)
     p.add_argument(
         "--layer-indices",
         type=int,
@@ -95,7 +95,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--log-batch-interval",
         type=int,
-        default=2500,
+        default=100,
         help="Print training batch progress every N steps (0 = only epoch summaries).",
     )
     p.add_argument(

@@ -45,3 +45,19 @@ def test_resolve_batch_size_prefers_backbone_override(monkeypatch):
 def test_resolve_batch_size_unknown_stage():
     with pytest.raises(ValueError):
         rp._resolve_batch_size("invalid", "dinov2_vitb14")
+
+
+def test_resolve_image_hw_uses_backbone_override(monkeypatch):
+    monkeypatch.setattr(rp, "IMAGE_SIZE_BY_BACKBONE", {"dinov2_vitb14": (518, 518), "sam_vit_b": (512, 512)})
+    monkeypatch.setattr(rp, "IMAGE_HEIGHT", 784)
+    monkeypatch.setattr(rp, "IMAGE_WIDTH", 784)
+    assert rp._resolve_image_hw("dinov2_vitb14") == (518, 518)
+    assert rp._resolve_image_hw("sam_vit_b") == (512, 512)
+
+
+def test_resolve_image_hw_falls_back_to_global(monkeypatch):
+    monkeypatch.setattr(rp, "IMAGE_SIZE_BY_BACKBONE", {})
+    monkeypatch.setattr(rp, "IMAGE_HEIGHT", 784)
+    monkeypatch.setattr(rp, "IMAGE_WIDTH", 784)
+    assert rp._resolve_image_hw("dinov2_vitb14") == (784, 784)
+    assert rp._resolve_image_hw("unknown_backbone") == (784, 784)

@@ -212,18 +212,19 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 | Symbol | Typical default | Description |
 |--------|-----------------|-------------|
 | `LAST_BLOCKS_LIST` | `[1, 2, 4]` | Block counts for fine-tuning sweep (PDF Stage 2) |
-| `FT_BATCH_SIZE` / `LORA_BATCH_SIZE` | 100 / 100 | Separate batch sizes for fine-tune and LoRA |
-| `FT_BATCH_SIZE_BY_BACKBONE` / `LORA_BATCH_SIZE_BY_BACKBONE` | `{}` / `{}` | Optional per-backbone batch overrides |
+| `FT_BATCH_SIZE` / `LORA_BATCH_SIZE` | 20 / 20 | Pairs per step for DINO backbones; SAM overridden to 4 via per-backbone map |
+| `FT_BATCH_SIZE_BY_BACKBONE` / `LORA_BATCH_SIZE_BY_BACKBONE` | `{"sam_vit_b": 4}` | Per-backbone batch overrides (SAM encoder is VRAM-heavy) |
 | `FT_LR` / `LORA_LR` | `5e-5` / `1e-3` | Learning rates |
 | `FT_WEIGHT_DECAY` | `0.01` | Weight decay for fine-tuning |
 | `LORA_ALPHA` | `16.0` | LoRA scaling factor |
 | `LORA_LAST_BLOCKS` | `2` | LoRA block count |
-| `PRECISION` | `auto` | Training precision policy (`auto`/`fp32`/`bf16`/`fp16`) |
-| `FT_EPOCHS` / `LORA_EPOCHS` | 200 | Epochs per training stage |
-| `FT_PATIENCE` / `LORA_PATIENCE` | 10 | Early stopping patience |
+| `PRECISION` | `auto` | Training precision policy (`auto`/`fp32`/`bf16`/`fp16`); MPS/CPU always resolve to fp32 |
+| `FT_EPOCHS` / `LORA_EPOCHS` | 50 | Epochs per training stage (early stopping typically triggers earlier) |
+| `FT_PATIENCE` / `LORA_PATIENCE` | 7 | Early stopping patience |
 | `LORA_RANK` | 8 | LoRA rank |
 | `PREPROCESS` | `FIXED_RESIZE` | Image preprocessing mode |
-| `IMAGE_HEIGHT` / `IMAGE_WIDTH` | 784 / 784 | Input image size |
+| `IMAGE_SIZE_BY_BACKBONE` | `{dinov2_vitb14: (518,518), dinov3_vitb16: (512,512), sam_vit_b: (512,512)}` | Per-backbone input size (exact patch-size multiples: 518=37×14, 512=32×16; SAM features always extracted at 1024×1024 internally) |
+| `IMAGE_HEIGHT` / `IMAGE_WIDTH` | 784 / 784 | Global fallback size for backbones not listed in `IMAGE_SIZE_BY_BACKBONE` |
 | `EVAL_SPLIT` | `test` | Evaluation split |
 | `EVAL_LIMIT` | 0 (full split) | Pair limit for debugging |
 | `LOG_BATCH_INTERVAL` | 100 | Batch logging frequency |
