@@ -135,10 +135,10 @@ FT_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {"sam_vit_b": 4}
 LORA_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {"sam_vit_b": 4}
 # Save training resume files every N batches within an epoch.
 # Lower values improve resumability on preemptible runtimes (e.g., Colab).
-RESUME_SAVE_INTERVAL: int = 100
+RESUME_SAVE_INTERVAL: int = 50
 # Training scripts print batch progress every N steps (0 = epoch summaries only).
 # Lower on CPU-only hosts so logs/dashboard move often (each step is slow).
-LOG_BATCH_INTERVAL: int = 100
+LOG_BATCH_INTERVAL: int = 50
 # Intermediate ViT layer for DINO feature extraction (passed as --layer-indices to training scripts).
 DINO_LAYER_INDICES: int = 4
 PREPROCESS: str = "FIXED_RESIZE"
@@ -725,12 +725,15 @@ def _export_tables(
             json.dump(by_difficulty_flag, f, indent=2)
 
     # Per-category breakdown (PDF: "how each backbone behaves across categories").
+    # Both macro (per-image) and micro (per-point) are stored so the CSV can serve paper comparisons.
     per_category: List[Dict[str, Any]] = []
     for r in results:
         pi = r.get("sd4match_per_image")
+        pp = r.get("sd4match_per_point")
         if not pi:
             continue
         entry: Dict[str, Any] = {"name": r.get("name"), "categories": {}}
+        # Macro: per-image average per category → pck@α
         for metric_key, cat_dict in pi.items():
             if not metric_key.startswith("custom_pck"):
                 continue
@@ -741,11 +744,35 @@ def _export_tables(
                 entry["categories"].setdefault(cat, {})
                 if isinstance(vals, list) and vals:
                     entry["categories"][cat][f"pck@{alpha_str}"] = float(sum(vals) / len(vals))
+        # Micro: per-point average per category → pck_pt@α (standard in most SPair-71k papers)
+        if pp:
+            for metric_key, cat_dict in pp.items():
+                if not metric_key.startswith("custom_pck"):
+                    continue
+                alpha_str = metric_key.replace("custom_pck", "")
+                for cat, vals in cat_dict.items():
+                    if cat == "all":
+                        continue
+                    entry["categories"].setdefault(cat, {})
+                    if isinstance(vals, list) and vals:
+                        entry["categories"][cat][f"pck_pt@{alpha_str}"] = float(sum(vals) / len(vals))
         per_category.append(entry)
     per_category_path = out_dir / "pck_results_per_category.json"
+    per_category_csv_path = out_dir / "pck_results_per_category.csv"
     if per_category:
         with open(per_category_path, "w", encoding="utf-8") as f:
             json.dump(per_category, f, indent=2)
+        # CSV pivot: rows = (run, metric), columns = categories — convenient for LaTeX tables.
+        all_cats = sorted({cat for entry in per_category for cat in entry["categories"]})
+        with open(per_category_csv_path, "w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["name", "metric"] + all_cats)
+            w.writeheader()
+            for entry in per_category:
+                for metric_key in ["pck@0.05", "pck@0.1", "pck@0.2", "pck_pt@0.05", "pck_pt@0.1", "pck_pt@0.2"]:
+                    row: Dict[str, Any] = {"name": entry["name"], "metric": metric_key}
+                    for cat in all_cats:
+                        row[cat] = entry["categories"].get(cat, {}).get(metric_key, "")
+                    w.writerow(row)
 
     wrote = [str(json_path), str(csv_path)]
     if per_image:
@@ -756,6 +783,7 @@ def _export_tables(
         wrote.append(str(by_difficulty_flag_path))
     if per_category:
         wrote.append(str(per_category_path))
+        wrote.append(str(per_category_csv_path))
     logger.log_line("Wrote " + " | ".join(wrote) + ".")
 
 
