@@ -348,8 +348,12 @@ def run_spair_pck_eval(
             "image": _custom_summary_all(ev_image),
             "point": _custom_summary_all(ev_point),
         }
-        # Flatten summary to match existing metrics table (aggregate only).
-        metrics = {f"pck@{a:g}": float(summary["image"][f"custom_pck{a}"]["all"]) for a in alphas}
+        # Flatten summary: macro (per-image mean) and micro (per-point mean).
+        # Most SPair-71k papers report per-point (micro); both are exported for flexibility.
+        metrics = {}
+        for a in alphas:
+            metrics[f"pck@{a:g}"]    = float(summary["image"][f"custom_pck{a}"]["all"])  # macro
+            metrics[f"pck_pt@{a:g}"] = float(summary["point"][f"custom_pck{a}"]["all"])  # micro
         # Serialize difficulty-bucketed evaluator outputs.
         by_difficulty_flag: Dict[str, Any] = {}
         for flag in diff_flags:

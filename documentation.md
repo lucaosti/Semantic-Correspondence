@@ -190,8 +190,10 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 - **Aggregate:** `pck_results.json`, `pck_results.csv`
 - **Per-image:** `pck_results_per_image.json`
 - **Per-point:** `pck_results_per_point.json`
-- **Per-category:** `pck_results_per_category.json` (mean PCK per SPair-71k category per eval run)
+- **Per-category:** `pck_results_per_category.json` + `pck_results_per_category.csv` — macro (`pck@α`) and micro (`pck_pt@α`) PCK per SPair-71k category per eval run
 - **Per-difficulty:** `pck_results_by_difficulty_flag.json` (viewpoint, scale, truncation, occlusion)
+- **Averaging note:** `pck@α` = per-image mean (macro); `pck_pt@α` = per-keypoint mean (micro) — the standard metric in most SPair-71k papers (Min et al. 2019, CHM, DHPF, CATS). Both are exported to `pck_results.csv` and the per-category CSV.
+- **Training loss curves:** `checkpoints/*_history.jsonl` (per-epoch `train_loss`/`val_loss`, written by `_training_common.py`); loaded by `Analysis_Local.ipynb §11` into `figures/training_loss_history.csv`.
 
 ---
 
@@ -227,8 +229,8 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 | `IMAGE_HEIGHT` / `IMAGE_WIDTH` | 784 / 784 | Global fallback size for backbones not listed in `IMAGE_SIZE_BY_BACKBONE` |
 | `EVAL_SPLIT` | `test` | Evaluation split |
 | `EVAL_LIMIT` | 0 (full split) | Pair limit for debugging |
-| `LOG_BATCH_INTERVAL` | 100 | Batch logging frequency |
-| `RESUME_SAVE_INTERVAL` | 100 | Mid-epoch resume checkpoint cadence |
+| `LOG_BATCH_INTERVAL` | 50 | Batch logging frequency |
+| `RESUME_SAVE_INTERVAL` | 50 | Mid-epoch resume checkpoint cadence |
 | `DINO_LAYER_INDICES` | `4` | Intermediate ViT layer for DINO feature extraction (passed as `--layer-indices`; ignored for SAM) |
 
 **Workflow toggles:** In addition to baseline and checkpoint eval toggles, `RUN_EVAL_FINETUNED_WSA` and `RUN_EVAL_LORA_WSA` enable WSA evaluation on trained checkpoints (PDF Stage 3 combined with Stages 2 and 4).
