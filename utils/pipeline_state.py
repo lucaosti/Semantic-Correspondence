@@ -24,6 +24,9 @@ SCHEMA_VERSION = 1
 
 
 def state_path(repo_root: Path) -> Path:
+    custom = os.environ.get("SEMANTIC_CORRESPONDENCE_STATE_PATH", "").strip()
+    if custom:
+        return Path(custom)
     return repo_root / "runs" / "pipeline_state.json"
 
 

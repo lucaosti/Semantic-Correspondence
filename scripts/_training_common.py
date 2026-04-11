@@ -87,9 +87,13 @@ def load_training_resume(
     stopper: EarlyStopping,
     grad_scaler: Optional[torch.cuda.amp.GradScaler],
     script_tag: str,
+    epochs: int = 0,
 ) -> tuple[int, int, float]:
     """
     Load ``*_resume.pt`` if ``resume_path_arg`` exists.
+
+    If the checkpoint carries ``training_complete=True`` the training loop will
+    be skipped entirely (returns ``epochs`` as ``full_epochs_done``).
 
     Returns
     -------
@@ -105,6 +109,17 @@ def load_training_resume(
         return 0, 0, float("inf")
 
     blob = _torch_load_checkpoint(resume_path_arg, device)
+
+    # Fast path: a previous run completed normally — skip the training loop.
+    if blob.get("training_complete"):
+        best_val = float(blob.get("best_val", float("inf")))
+        print(
+            f"{script_tag}: RESUME training already complete "
+            f"(file={resume_path_arg} best_val={best_val:.6f}); skipping loop.",
+            flush=True,
+        )
+        return epochs, 0, best_val
+
     model.load_state_dict(blob["model"], strict=True)
     optimizer.load_state_dict(blob["optimizer"])
     if grad_scaler is not None and "grad_scaler" in blob:
@@ -207,6 +222,7 @@ def run_gaussian_training_loop(
         stopper=stopper,
         grad_scaler=grad_scaler,
         script_tag=script_tag,
+        epochs=epochs,
     )
 
     extra = f" {log_preamble_extra}" if log_preamble_extra else " "
@@ -329,8 +345,17 @@ def run_gaussian_training_loop(
             print(f"Early stopping at epoch {epoch}")
             break
 
-    if os.path.isfile(resume_path):
-        os.remove(resume_path)
+    # Mark the checkpoint as complete so that if the pipeline re-runs this stage
+    # (e.g. due to a Colab disconnect before mark_step_done) the training loop is
+    # skipped and the stage completes instantly without re-training from scratch.
+    completion_payload: dict[str, Any] = {
+        "training_complete": True,
+        "best_val": best_val,
+        "full_epochs_done": epochs,
+        "batch_in_epoch": 0,
+    }
+    completion_payload.update(extra_payload)
+    save_resume_atomic(resume_path, completion_payload)
     print("Done.")
 
 

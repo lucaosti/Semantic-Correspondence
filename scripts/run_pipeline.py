@@ -878,11 +878,14 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             state = {"fingerprint": fp, "completed": []}
             logger.log_line(f"pipeline_state: no prior file (will write {_ps.state_path(cwd)}).")
         elif raw.get("fingerprint") != fp:
-            state = {"fingerprint": fp, "completed": []}
-            logger.log_line(
-                "pipeline_state: fingerprint mismatch (config changed); previous completed steps ignored."
-            )
+            state = dict(raw)
+            state["completed"] = list(state.get("completed", []))
+            state["fingerprint"] = fp
             _ps.save_state(cwd, state)
+            logger.log_line(
+                "pipeline_state: config fingerprint changed; completed steps preserved. "
+                "Delete AML_results/ on Drive to restart from scratch."
+            )
         else:
             state = dict(raw)
             state["completed"] = list(state.get("completed", []))
