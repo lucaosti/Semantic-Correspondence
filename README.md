@@ -58,7 +58,11 @@ Use **`AML_Colab.ipynb`** at the repository root. It is self-contained and handl
 cloning, SPair-71k download, dependency installation, weight download, pipeline execution, and results analysis.
 
 Artifacts persist on Google Drive via symlinks (`runs/`, `checkpoints/`), so training resumes across Colab disconnects.
-The pipeline cell streams live logs directly in notebook output, and the notebook includes an optional stage dashboard based on `runs/logs/stage_events.jsonl`.
+The pipeline cell refreshes a small dashboard from `runs/logs/stage_events.jsonl` and tails recent log lines.
+
+## Local Jupyter
+
+Use **`AML_Local.ipynb`** from the repository root for the same pipeline and analysis cells (dataset/weights if missing, `config.yaml`, hardware-aware batch sizes).
 
 ---
 
@@ -72,7 +76,8 @@ The pipeline cell streams live logs directly in notebook output, and the noteboo
 | `data/` | SPair-71k dataset, preprocessing, data interface |
 | `scripts/` | CLI tools and `run_pipeline.py` orchestrator |
 | `docs/` | Project rules (`info.md`), literature review (`references.md`), state of the art (`state-of-art.md`) |
-| `AML_Colab.ipynb` | Google Colab end-to-end notebook |
+| `AML_Colab.ipynb` | Google Colab end-to-end notebook (H100-oriented defaults) |
+| `AML_Local.ipynb` | Local end-to-end notebook (same workflow) |
 | `documentation.md` | Full technical reference |
 
 ## Configuration

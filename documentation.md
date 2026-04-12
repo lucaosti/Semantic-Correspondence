@@ -46,7 +46,7 @@ Weights are **not** committed to git. Use `scripts/download_pretrained_weights.p
 | `docs/` | `info.md` (rules), `references.md` (references). Only `docs/**/*.pdf` is gitignored under `docs/`; `*.md` files are tracked. |
 | `runs/`, `checkpoints/` | Gitignored artifacts: logs, exports, downloaded weights, training checkpoints |
 
-**Root:** `AML_Colab.ipynb` (sole entry point), `README.md`, `requirements.txt`, `pyproject.toml`, `documentation.md`.
+**Root:** `AML_Colab.ipynb` (Colab entry point), `AML_Local.ipynb` (local entry point), `README.md`, `requirements.txt`, `pyproject.toml`, `documentation.md`.
 
 ---
 
@@ -136,7 +136,7 @@ Fine-tuning and LoRA have **separate** batch size controls to avoid silent overw
 | `train_finetune.py` / `train_lora.py` | `--batch-size` **100** | `--batch-size` **100** |
 | `run_pipeline.py` | `FT_BATCH_SIZE` **100** | `LORA_BATCH_SIZE` **100** |
 | `training/config.py` dataclasses | **100** | **100** |
-| Colab config (`AML_Colab.ipynb`) | map: DINOv2=32, DINOv3=32, SAM=4 | map: DINOv2=48, DINOv3=48, SAM=4 |
+| Colab config (`AML_Colab.ipynb`, H100-oriented) | map: DINOv2=32, DINOv3=32, SAM=8 | map: DINOv2=48, DINOv3=48, SAM=8 |
 
 `run_pipeline.py` also supports optional per-backbone overrides through
 `FT_BATCH_SIZE_BY_BACKBONE` and `LORA_BATCH_SIZE_BY_BACKBONE` (YAML:
@@ -167,7 +167,7 @@ Injected on late MLP linears (`models/common/lora.py` + backbone-specific hooks)
 ### 6.7 Early stopping and resume
 
 - **Early stopping:** `training/early_stopping.py` on **validation loss** each epoch (`patience` configurable).
-- **Resume files:** `checkpoints/<backbone>_lastblocks*_resume.pt` / LoRA equivalents store model, optimizer, epoch, stopper state, and optional `batch_in_epoch` for mid-epoch resume. Mid-epoch resume is only as granular as the save cadence: training scripts write these files every `--resume-save-interval` batches (recommend **100** on preemptible runtimes like Colab).
+- **Resume files:** `checkpoints/<backbone>_lastblocks*_resume.pt` / LoRA equivalents store model, optimizer, epoch, stopper state, and optional `batch_in_epoch` for mid-epoch resume. Mid-epoch resume is only as granular as the save cadence: training scripts write these files every `--resume-save-interval` batches (`AML_Colab.ipynb` uses **25** for Colab disconnects; `AML_Local.ipynb` uses **50**; the pipeline default is **50**).
 - **Two-level resume:** (1) pipeline stage skip via `runs/pipeline_state.json` (`PIPELINE_RESUME=True`), and (2) training resume via `checkpoints/*_resume.pt` (`--resume ...` + periodic saves). If you see training restart from batch 0 after an interruption, it usually means no recent `*_resume.pt` was written (save interval too large) or `checkpoints/` was not persisted.
 
 ---
@@ -239,7 +239,7 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 
 **YAML `--config`:** `_apply_pipeline_yaml` maps sections into module globals. Fine-tuning and LoRA have **separate** scalar batch size fields (`finetune.batch_size` → `FT_BATCH_SIZE`, `lora.batch_size` → `LORA_BATCH_SIZE`) plus optional per-backbone maps (`finetune.batch_size_by_backbone`, `lora.batch_size_by_backbone`). Precision is configured through `runtime.precision` → `PRECISION`. The `finetune.last_blocks` field accepts either a single integer or a list.
 
-**Colab overrides:** The Colab notebook writes `config.yaml` with `runtime.precision: auto`, scalar fallback batch sizes, per-backbone batch maps, and reduced schedules (`epochs: 50`, `patience: 7`) compared to in-script defaults. This balances throughput and stability on constrained Colab sessions while keeping SAM conservative.
+**Colab overrides:** `AML_Colab.ipynb` writes `config.yaml` with `runtime.precision: auto`, `num_workers: 1`, frequent `resume_save_interval` (25), H100-oriented per-backbone batch maps (see §6.3), and `epochs: 50` / `patience: 7`.
 
 ### 8.3 Environment variables
 
@@ -269,14 +269,14 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 
 ## 10. Notebook and config file
 
-- **`AML_Colab.ipynb`:** the sole entry point for running the full pipeline. It runs end-to-end on Google Colab (clone repo, download + extract SPair-71k, download pretrained weights, write `config.yaml`, run the pipeline). Includes post-pipeline analysis cells: aggregate PCK table, multi-block comparison plot, per-category heatmap, per-difficulty breakdown, and qualitative keypoint visualizations.
-- **Colab-specific overrides:** the notebook writes `config.yaml` with `runtime.precision: auto`, scalar fallback batch sizes, and per-backbone batch maps (`finetune.batch_size_by_backbone`, `lora.batch_size_by_backbone`) alongside `epochs: 50` and `patience: 7`. These values are tuned for better GPU utilization while keeping SAM conservative.
+- **`AML_Colab.ipynb`:** Colab entry point (H100-oriented defaults). Clone repo, Google Drive symlinks for `runs/` and `checkpoints/`, SPair-71k, weights, `config.yaml`, pipeline subprocess with a live refresh over `stage_events.jsonl` + log tail, then the same analysis cells as local (PCK table, fine-tune depth plot, per-category heatmap, per-difficulty, qualitative DINOv2).
+- **`AML_Local.ipynb`:** same semantics from the repository root: optional `pip install -e ".[notebook]"`, dataset/weights if missing, hardware-aware batch maps (bf16-capable CUDA vs older GPUs vs CPU/MPS), `config.yaml`, pipeline + analysis.
+- **Colab-specific overrides:** `runtime.num_workers: 1`, `resume_save_interval` / `log_batch_interval: 25`, `precision: auto` (bf16 on Hopper), per-backbone batch maps as in §6.3 Colab row, `epochs: 50`, `patience: 7`.
 - **`config.yaml`:** notebook-generated pipeline configuration. It contains machine-specific absolute paths, so it is **not tracked in git** (see `.gitignore`). The notebook writes it for `scripts/run_pipeline.py --config config.yaml`.
 - **YAML reader:** the pipeline applies keys via `_apply_pipeline_yaml` in `run_pipeline.py` (``dataset``, ``workflow_toggles``, etc.). Key runtime overrides include `runtime.dino_layer_indices` → `DINO_LAYER_INDICES` (int, default 4): intermediate ViT layer for DINO feature extraction.
 - **SPair-71k download URL (Colab):** `https://cvlab.postech.ac.kr/research/SPair-71k/data/SPair-71k.tar.gz`
-- **Pipeline reset (Colab):** in `AML_Colab.ipynb`, the code cell under **§8. Write config.yaml** sets `START_FROM_SCRATCH` (default `False`). The **§9. Run pipeline** cell launches `scripts/run_pipeline.py` via `subprocess.Popen` with line-by-line streaming to notebook output, and passes **`SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1`** in the child `env` when the flag is true (clears `runs/pipeline_state.json` bookkeeping only; does not delete checkpoints on Drive). When false, that key is omitted from the subprocess environment.
-- **Colab stage dashboard:** the notebook includes an optional helper (`show_stage_dashboard`) that reads `runs/logs/stage_events.jsonl` and displays recent structured stage events.
-- **Qualitative cell (§15):** the DINOv2 demo uses `DenseExtractorConfig(..., dinov2_weights_path=...)` pointing at `checkpoints/dinov2_vitb14_pretrain.pth` so visualization does not rely on `torch.hub` downloads.
+- **Pipeline reset (Colab):** in `AML_Colab.ipynb`, the config cell sets `START_FROM_SCRATCH` (default `False`). The run-pipeline cell launches `scripts/run_pipeline.py` via `subprocess.Popen` and sets **`SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1`** when the flag is true (clears `runs/pipeline_state.json` only; does not delete Drive checkpoints).
+- **Qualitative cell:** DINOv2 baseline visualization uses `DenseExtractorConfig(..., dinov2_weights_path=...)` with `checkpoints/dinov2_vitb14_pretrain.pth` (no `torch.hub` fetch).
 
 ---
 
