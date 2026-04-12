@@ -153,7 +153,8 @@ def resolve_precision_mode(requested: str, *, device: torch.device) -> str:
 
     if token == "auto":
         if device.type == "cuda":
-            if torch.cuda.is_bf16_supported():
+            props = torch.cuda.get_device_properties(torch.cuda.current_device())
+            if props.major >= 8 and torch.cuda.is_bf16_supported():
                 return "bf16"
             return "fp16"
         return "fp32"
