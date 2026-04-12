@@ -9,7 +9,6 @@ from __future__ import annotations
 import json as _json
 from contextlib import nullcontext
 import os
-from itertools import islice
 from typing import Any, Callable, Dict, Optional
 
 import torch
@@ -258,7 +257,21 @@ def run_gaussian_training_loop(
         n_batches = 0
         train_it = iter(train_loader)
         if skip_batches:
-            train_it = islice(train_it, skip_batches, None)
+            # islice would skip silently: each step still runs full DataLoader I/O (decode, augment).
+            # Large skips look like a hang; show progress.
+            print(
+                f"{script_tag}: mid-epoch resume — discarding {skip_batches} batches "
+                f"(load from disk only, no optimizer steps yet; can take many minutes).",
+                flush=True,
+            )
+            _progress = 200
+            for _i in range(skip_batches):
+                if _progress and _i > 0 and _i % _progress == 0:
+                    print(f"  ... resume skip {_i}/{skip_batches}", flush=True)
+                try:
+                    next(train_it)
+                except StopIteration:
+                    break
         for batch_idx, batch in enumerate(train_it, start=skip_batches):
             if log_batch_interval and batch_idx % log_batch_interval == 0:
                 print(f"  batch {batch_idx}/{n_train_batches}", flush=True)
