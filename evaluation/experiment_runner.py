@@ -317,7 +317,7 @@ def run_spair_pck_eval(
             ev_image.calculate_pck(trg_kps_for_eval, matches_b, n_pts, categories, pckthres, method_name="custom")
             ev_point.calculate_pck(trg_kps_for_eval, matches_b, n_pts, categories, pckthres, method_name="custom")
 
-            # Difficulty breakdown: route sample into each flag’s bucket (0 or 1) when available.
+            # Difficulty breakdown: route each sample into the flag bucket (0 or 1) when present.
             for flag in diff_flags:
                 b = _get_flag(batch, flag)
                 if b is None:

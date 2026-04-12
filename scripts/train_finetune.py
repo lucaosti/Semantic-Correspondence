@@ -7,7 +7,7 @@ loss, and early stopping. You still need official backbones on ``PYTHONPATH``.
 
 When this training runs via the orchestrated pipeline (`scripts/run_pipeline.py`), the
 pipeline passes explicit ``--epochs`` / ``--patience`` values, overriding this script's
-standalone defaults (see `documentation.md`, §8.2).
+standalone defaults (see `documentation.md`, section 8.2).
 
 **Splits:** train on ``train`` (``trn.txt``), select hyperparameters / early-stop on ``val``,
 report on ``test`` (run a separate eval script).
@@ -74,7 +74,7 @@ def parse_args() -> argparse.Namespace:
         help="DataLoader workers (1 = safe default; -1 = auto from CPU count and OS).",
     )
     p.add_argument("--preprocess", type=str, default="FIXED_RESIZE")
-    p.add_argument("--height", type=int, default=784, help="Input height; must be divisible by patch size. Recommended: DINOv2→518, DINOv3/SAM→512. Fallback: 784.")
+    p.add_argument("--height", type=int, default=784, help="Input height (multiple of patch). Typical: DINOv2 518, DINOv3/SAM 512. Default 784.")
     p.add_argument("--width", type=int, default=784)
     p.add_argument("--patience", type=int, default=7)
     p.add_argument(

@@ -23,7 +23,7 @@ Scripts that report benchmark numbers should use `--split test` unless you inten
 
 ## Training
 
-- The Gaussian correspondence loss **averages over pairs in a batch**. Training scripts default to **`--batch-size 20`** for DINO backbones; SAM uses 4 (set via `FT_BATCH_SIZE_BY_BACKBONE`/`LORA_BATCH_SIZE_BY_BACKBONE` in the pipeline). Reduce if OOM; larger batches improve GPU utilization when VRAM allows.
+- The Gaussian correspondence loss **averages over pairs in a batch**. Training scripts default to **`--batch-size 20`** for DINO backbones; SAM uses 4 (set via `FT_BATCH_SIZE_BY_BACKBONE`/`LORA_BATCH_SIZE_BY_BACKBONE` in the pipeline). Reduce if OOM; larger batches improve GPU utilization when VRAM allows. See [`documentation.md` §6.3](../documentation.md) for the full defaults table (CLI, pipeline, Colab overrides) and notes on the effect of changing batch size or precision.
 
 ## Language
 

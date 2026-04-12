@@ -3,7 +3,7 @@ Input-space conversions between dataset tensors and official backbone expectatio
 
 The SPair dataset pipeline uses ImageNet mean/std normalization for ViT-style training.
 SAM's official image encoder expects a different pixel normalization and a fixed
-``1024 × 1024`` input resolution.
+``1024 x 1024`` input resolution.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ def imagenet_to_sam_input(
     antialias: bool = True,
 ) -> torch.Tensor:
     """
-    Convert an ImageNet-normalized batch to SAM-style normalized ``1024×1024`` tensors.
+    Convert an ImageNet-normalized batch to SAM-style normalized ``1024x1024`` tensors.
 
     This denormalizes to ``[0, 1]``, rescales to ``[0, 255]``, resizes to ``target_size``,
     then applies SAM mean/std normalization (same as the official SAM image encoder in ``models/sam/``).

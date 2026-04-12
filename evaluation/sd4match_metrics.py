@@ -66,8 +66,8 @@ def evaluate_matches_sd4match(
     Compute SD4Match-identical PCK summaries given predicted matches.
 
     This uses SD4Match's internal `calculate_pck` and result aggregation, but it does NOT
-    impose SD4Match's matching strategy. That lets the project keep its own Stage 1–3
-    prediction rules (argmax + optional window soft-argmax) while having identical metrics.
+    impose SD4Match's matching strategy. The project keeps its own Stage 1-3 prediction rules
+    (argmax + optional window soft-argmax) while using identical metrics.
 
     Shapes follow SD4Match conventions:
     - trg_kps: (B, N, 2)

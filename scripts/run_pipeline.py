@@ -1,41 +1,23 @@
 #!/usr/bin/env python3
 """
-Run project steps from one place: verify data, train backbones, evaluate PCK, export tables.
+Orchestrate dataset verify, fine-tune, LoRA, PCK evaluation, exports, and optional pytest.
 
-Edit the **boolean flags and 3-element tuples** in the configuration block below, then run from
-the repository root with the venv active and ``pip install -e .``:
+Run: ``python scripts/run_pipeline.py`` or ``python scripts/run_pipeline.py --config config.yaml``.
+YAML overrides the in-file defaults (same keys as notebook ``config.yaml``). Edit booleans and
+3-tuples below; slots are always (DINOv2 ViT-B/14, DINOv3 ViT-B/16, SAM ViT-B).
 
-.. code-block:: bash
+SAM needs ``checkpoints/sam_vit_b_01ec64.pth`` (from ``scripts/download_pretrained_weights.py``)
+or ``SAM_CHECKPOINT`` / the in-script path.
 
-   python scripts/run_pipeline.py
-   python scripts/run_pipeline.py --config config.yaml
+Logs: ``runs/logs/pipeline_<utc>.log``, ``runs/logs/current.log``, ``runs/logs/stage_events.jsonl``.
+Resume: ``PIPELINE_RESUME`` plus ``runs/pipeline_state.json`` and ``*_resume.pt`` (in-epoch saves
+every ``RESUME_SAVE_INTERVAL`` / training ``--resume-save-interval`` batches). Config fingerprint
+mismatch clears stale state. Full reset: ``SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1``. Stdout mirror
+off: ``SEMANTIC_CORRESPONDENCE_PIPELINE_LOG_FILE_ONLY=1`` (tail ``current.log``).
 
-The optional ``--config`` flag loads a YAML file (same shape as notebook-written ``config.yaml``:
-see ``AML_Colab.ipynb`` generator) and overrides the in-script defaults without
-editing this file.
-
-Order of execution: dataset verification (optional) → fine-tune (per backbone flag) → LoRA (per
-flag) → PCK evaluation and optional exports → optional pytest → optional notebook hint.
-
-The three tuple slots always mean **(DINOv2 ViT-B/14, DINOv3 ViT-B/16, SAM ViT-B)**.
-
-Defaults run **all** steps for **all** backbones. SAM needs weights: place
-``checkpoints/sam_vit_b_01ec64.pth`` (downloaded by ``scripts/download_pretrained_weights.py``),
-set ``SAM_CHECKPOINT`` below, or export ``SAM_CHECKPOINT``.
-
-Logs: each invocation writes ``runs/logs/pipeline_<UTC_stamp>.log``, updates ``runs/logs/manifest.tsv``,
-and sets ``runs/logs/current.log`` (symlink) to that file. Subprocess output is merged into the same file (see
-:class:`PipelineLogger`). With ``SEMANTIC_CORRESPONDENCE_PIPELINE_LOG_FILE_ONLY=1`` (set by
-the environment variable), nothing is mirrored to the process stdout/stderr—use
-``tail -f runs/logs/current.log`` to watch progress.
-
-Structured stage traces append to ``runs/logs/stage_events.jsonl`` (one JSON object per line: ``action``, ``stage_id``, ``ts_utc``, …).
-
-**Resume / interrupt:** Set ``PIPELINE_RESUME = True`` (default) to skip stages already recorded in ``runs/pipeline_state.json`` and to pass ``--resume`` into training when a ``*_resume.pt`` file exists (optimizer + model state). Training scripts also write that file **during** an epoch every ``--resume-save-interval`` batches (default 100), not only after validation, so long single epochs are not lost on kill. Changing training/eval hyperparameters changes a **config fingerprint**; a mismatch clears remembered progress so runs are not mixed. For a deliberate full restart without deleting checkpoints, run with env ``SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1``.
-
-**Epochs** are set by ``FT_EPOCHS`` / ``LORA_EPOCHS`` (and ``FT_PATIENCE`` / ``LORA_PATIENCE`` for early stopping) in the SHARED CONFIG block below. Training scripts also print ``epoch k/total``, periodic batch indices, and ``train_loss`` / ``val_loss`` per epoch.
-
-**Hardware:** training defaults to **batch size 20** pairs per step for DINO backbones (SAM uses 4 via ``FT_BATCH_SIZE_BY_BACKBONE`` / ``LORA_BATCH_SIZE_BY_BACKBONE``). Precision is configurable through ``PRECISION`` (``auto`` / ``fp32`` / ``bf16`` / ``fp16``). Set ``DEVICE`` / ``NUM_WORKERS`` to ``None`` for adaptive defaults (CUDA → MPS → CPU; Windows num_workers auto-capped). Fine-tuning sweeps over ``LAST_BLOCKS_LIST`` (e.g. ``[1, 2, 4]``) for PDF Stage 2 compliance.
+Defaults: DINO batch 20, SAM 4 via per-backbone maps; ``PRECISION`` auto/fp32/bf16/fp16;
+``DEVICE`` / ``NUM_WORKERS`` ``None`` for auto. Fine-tune sweeps ``LAST_BLOCKS_LIST``. Detail:
+``documentation.md``.
 """
 
 from __future__ import annotations
@@ -53,7 +35,7 @@ _REPO = Path(__file__).resolve().parents[1]
 _SAM_VIT_B_DEFAULT = _REPO / "checkpoints" / "sam_vit_b_01ec64.pth"
 
 # =============================================================================
-# PIPELINE TOGGLES — edit True/False only (or tuples of three bools)
+# PIPELINE TOGGLES - edit True/False or 3-tuples (DINOv2, DINOv3, SAM)
 # =============================================================================
 
 # Skip pipeline stages already finished (see ``runs/pipeline_state.json``); resume training epochs
@@ -63,10 +45,10 @@ PIPELINE_RESUME: bool = True
 # Run ``scripts/verify_dataset.py`` before anything else (recommended).
 RUN_VERIFY_DATASET: bool = True
 
-# Fine-tune last transformer blocks (Task 2): one flag per backbone.
+# Fine-tune last blocks (one bool per backbone slot).
 TRAIN_FINETUNE: Tuple[bool, bool, bool] = (True, True, True)
 
-# LoRA on last MLP linears (Task 4): one flag per backbone.
+# LoRA on last MLP linears (one bool per backbone slot).
 TRAIN_LORA: Tuple[bool, bool, bool] = (True, True, True)
 
 # Baseline PCK evaluation (no checkpoint) via ``evaluation.experiment_runner`` (same as CLI eval).
@@ -94,20 +76,18 @@ RUN_EXPORT_METRICS_TABLES: bool = True
 RUN_PYTEST: bool = True
 
 # =============================================================================
-# SHARED CONFIG — paths, training args, evaluation split
+# SHARED CONFIG - paths, training, evaluation
 # =============================================================================
 
-# ``None`` → ``data/paths.resolve_spair_root()`` (env ``SPAIR_ROOT`` / default under ``data/``).
+# ``None``: ``data/paths.resolve_spair_root()`` (env ``SPAIR_ROOT`` or default under ``data/``).
 SPAIR_ROOT: Optional[str] = None
 
-# Dataset/metrics backend selection (PDF-first portability).
-# - dataset backend controls how samples are loaded
-# - metrics backend controls how PCK is aggregated/reported
+# Dataset and PCK metrics backend ("sd4match" | "native").
 DATASET_BACKEND: str = "sd4match"  # "sd4match" | "native"
 METRICS_BACKEND: str = "sd4match"  # "sd4match" | "native"
 
 CHECKPOINT_DIR: str = "checkpoints"
-# PDF Stage 2: sweep over multiple block counts to study fine-tuning depth.
+# Fine-tune sweep: train separate checkpoints per last-blocks value.
 LAST_BLOCKS_LIST: List[int] = [1, 2, 4]
 LORA_RANK: int = 8
 LORA_LAST_BLOCKS: int = 2
@@ -130,7 +110,7 @@ LORA_PATIENCE: int = 7
 LORA_LR: float = 1e-3
 LORA_ALPHA: float = 16.0
 PRECISION: str = "auto"
-# SAM encoder is VRAM-heavy even at 512×512 input; keep its batch at 4.
+# SAM encoder is VRAM-heavy at 512x512; keep its batch at 4.
 FT_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {"sam_vit_b": 4}
 LORA_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {"sam_vit_b": 4}
 # Save training resume files every N batches within an epoch.
@@ -143,25 +123,24 @@ LOG_BATCH_INTERVAL: int = 50
 DINO_LAYER_INDICES: int = 4
 PREPROCESS: str = "FIXED_RESIZE"
 # Per-backbone image sizes: exact multiples of each backbone's patch size.
-# DINOv2 patch=14: 518 = 37×14. DINOv3 patch=16: 512 = 32×16. SAM patch=16: 512 (features always
-# extracted at 1024×1024 internally by SAM's encoder regardless of dataset input size).
+# DINOv2 patch 14: 518 = 37*14. DINOv3 patch 16: 512 = 32*16. SAM patch 16: 512 (encoder uses 1024x1024 internally).
 IMAGE_SIZE_BY_BACKBONE: Dict[str, Tuple[int, int]] = {
     "dinov2_vitb14": (518, 518),
     "dinov3_vitb16": (512, 512),
     "sam_vit_b": (512, 512),
 }
-# Global fallback for backbones not listed in IMAGE_SIZE_BY_BACKBONE (784 = 56×14 = 49×16).
+# Global fallback if backbone not in IMAGE_SIZE_BY_BACKBONE (784 = 56*14 = 49*16).
 IMAGE_HEIGHT: int = 784
 IMAGE_WIDTH: int = 784
-# ``None`` → :func:`utils.hardware.recommended_dataloader_workers`
+# ``None``: :func:`utils.hardware.recommended_dataloader_workers`
 NUM_WORKERS: Optional[int] = None
-# ``None`` → CUDA if available, else Apple MPS, else CPU
+# ``None``: CUDA if available, else MPS, else CPU
 DEVICE: Optional[str] = None
 
 # Evaluation split: ``test`` for benchmark numbers (see ``docs/info.md``); use ``val`` for faster runs.
 EVAL_SPLIT: str = "test"
 EVAL_LIMIT: int = 0  # >0: only first N pairs per run (debug)
-# PDF default thresholds.
+# PCK alpha thresholds.
 EVAL_ALPHAS: Tuple[float, ...] = (0.05, 0.1, 0.2)
 
 # Window soft-argmax knobs.
@@ -616,7 +595,7 @@ def _build_eval_specs(
                 **bk,
             ))
 
-        # Fine-tuned checkpoints: one per last_blocks value (PDF Stage 2 sweep).
+        # Fine-tuned: one eval spec per last-blocks checkpoint.
         for nb in LAST_BLOCKS_LIST:
             ck_path = _default_finetune_ckpt_for(cwd, backbone, nb)
             ck = _resolve_ckpt_path(cwd, ck_path)
@@ -693,8 +672,7 @@ def _export_tables(
             w.writeheader()
             w.writerows(rows)
 
-    # PDF requirement: keep per-image and per-point results available by default when using
-    # SD4Match metrics backend. These are stored as separate JSON files for convenience.
+    # SD4Match backend: also write per-image and per-point JSON sidecars when present.
     per_image = []
     per_point = []
     by_difficulty_flag = []
@@ -724,8 +702,7 @@ def _export_tables(
         with open(by_difficulty_flag_path, "w", encoding="utf-8") as f:
             json.dump(by_difficulty_flag, f, indent=2)
 
-    # Per-category breakdown (PDF: "how each backbone behaves across categories").
-    # Both macro (per-image) and micro (per-point) are stored so the CSV can serve paper comparisons.
+    # Per-category breakdown: macro (per-image) and micro (per-point) for tables.
     per_category: List[Dict[str, Any]] = []
     for r in results:
         pi = r.get("sd4match_per_image")
@@ -733,7 +710,7 @@ def _export_tables(
         if not pi:
             continue
         entry: Dict[str, Any] = {"name": r.get("name"), "categories": {}}
-        # Macro: per-image average per category → pck@α
+        # Macro: per-image mean per category -> pck@alpha
         for metric_key, cat_dict in pi.items():
             if not metric_key.startswith("custom_pck"):
                 continue
@@ -744,7 +721,7 @@ def _export_tables(
                 entry["categories"].setdefault(cat, {})
                 if isinstance(vals, list) and vals:
                     entry["categories"][cat][f"pck@{alpha_str}"] = float(sum(vals) / len(vals))
-        # Micro: per-point average per category → pck_pt@α (standard in most SPair-71k papers)
+        # Micro: per-point mean per category -> pck_pt@alpha
         if pp:
             for metric_key, cat_dict in pp.items():
                 if not metric_key.startswith("custom_pck"):
@@ -762,7 +739,7 @@ def _export_tables(
     if per_category:
         with open(per_category_path, "w", encoding="utf-8") as f:
             json.dump(per_category, f, indent=2)
-        # CSV pivot: rows = (run, metric), columns = categories — convenient for LaTeX tables.
+        # CSV pivot: rows (run, metric), columns categories (e.g. LaTeX).
         all_cats = sorted({cat for entry in per_category for cat in entry["categories"]})
         with open(per_category_csv_path, "w", encoding="utf-8", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["name", "metric"] + all_cats)
@@ -945,7 +922,7 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
         base_train.extend(["--sam-checkpoint", effective_sam])
     base_train.extend(["--log-batch-interval", str(LOG_BATCH_INTERVAL)])
 
-    # --- Fine-tuning: sweep over LAST_BLOCKS_LIST (PDF Stage 2) ---
+    # Fine-tuning: one run per entry in LAST_BLOCKS_LIST.
     for i, backbone in enumerate(BACKBONE_NAMES):
         if not TRAIN_FINETUNE[i]:
             continue

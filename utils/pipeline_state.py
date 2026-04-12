@@ -7,7 +7,7 @@ progress is ignored so checkpoints are not mixed across incompatible configs.
 
 Environment:
 
-* ``SEMANTIC_CORRESPONDENCE_PIPELINE_RESET`` — if non-empty, delete state at pipeline start
+* ``SEMANTIC_CORRESPONDENCE_PIPELINE_RESET``: if non-empty, delete state at pipeline start
   (full restart while keeping checkpoints on disk).
 """
 

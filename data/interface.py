@@ -95,7 +95,7 @@ class _SD4MatchSampleAdapter(Dataset):
             sample["tgt_imsize"] = sample["trg_imsize"]
 
         # Difficulty flag aliases (PDF reporting: "difficulty levels").
-        # SD4Match short keys → project explicit names.
+        # SD4Match short keys -> project explicit names.
         if "vpvar" in sample and "viewpoint_variation" not in sample:
             sample["viewpoint_variation"] = sample["vpvar"]
         if "scvar" in sample and "scale_variation" not in sample:

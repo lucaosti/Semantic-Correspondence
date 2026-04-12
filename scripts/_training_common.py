@@ -110,7 +110,7 @@ def load_training_resume(
 
     blob = _torch_load_checkpoint(resume_path_arg, device)
 
-    # Fast path: a previous run completed normally — skip the training loop.
+    # Fast path: prior run finished; skip the training loop.
     if blob.get("training_complete"):
         best_val = float(blob.get("best_val", float("inf")))
         print(

@@ -65,7 +65,7 @@ class DenseFeatureExtractor(nn.Module):
     Notes
     -----
     - DINOv2 uses patch size ``14``; DINOv3 uses patch size ``16``.
-    - SAM internally resizes to ``1024×1024`` and uses SAM-specific normalization.
+    - SAM internally resizes to ``1024x1024`` and uses SAM-specific normalization.
     """
 
     def __init__(self, cfg: DenseExtractorConfig, *, freeze: bool = True) -> None:

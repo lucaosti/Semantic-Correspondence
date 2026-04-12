@@ -133,18 +133,26 @@ Fine-tuning and LoRA have **separate** batch size controls to avoid silent overw
 
 | Location | Fine-tune default | LoRA default |
 |----------|-------------------|--------------|
-| `train_finetune.py` / `train_lora.py` | `--batch-size` **100** | `--batch-size` **100** |
-| `run_pipeline.py` | `FT_BATCH_SIZE` **100** | `LORA_BATCH_SIZE` **100** |
-| `training/config.py` dataclasses | **100** | **100** |
+| `train_finetune.py` / `train_lora.py` | `--batch-size` **20** | `--batch-size` **20** |
+| `run_pipeline.py` | `FT_BATCH_SIZE` **20** | `LORA_BATCH_SIZE` **20** |
+| `training/config.py` dataclasses | **20** | **20** |
+| Per-backbone override (pipeline) | `sam_vit_b` → **4** | `sam_vit_b` → **4** |
 | Colab config (`AML_Colab.ipynb`, H100-oriented) | map: DINOv2=32, DINOv3=32, SAM=8 | map: DINOv2=48, DINOv3=48, SAM=8 |
 
 `run_pipeline.py` also supports optional per-backbone overrides through
 `FT_BATCH_SIZE_BY_BACKBONE` and `LORA_BATCH_SIZE_BY_BACKBONE` (YAML:
 `finetune.batch_size_by_backbone`, `lora.batch_size_by_backbone`).
 When a backbone is not present in the map, the scalar fallback (`FT_BATCH_SIZE` / `LORA_BATCH_SIZE`) is used.
+See also the Training section in [`docs/info.md`](docs/info.md) for the normative batch-size policy.
 
 Training precision is controlled by `PRECISION` (`auto`/`fp32`/`bf16`/`fp16`) and passed to both training scripts.
 `auto` resolves to `bf16` (or `fp16`) on CUDA and to `fp32` on non-CUDA devices. **Evaluation** uses **batch size 1** for the PCK loop.
+
+#### Effect of changing batch size or precision
+
+The Gaussian correspondence loss averages over pairs, so the loss scale is batch-independent; however, smaller batches produce noisier gradient estimates and an effectively higher learning rate. The linear scaling rule would suggest reducing LR proportionally, but AdamW is generally robust enough that moderate changes (e.g. 20 → 8) converge comparably. Expect more oscillation in validation loss and possibly earlier early-stopping triggers with very small batches.
+
+Switching from `bf16` to `fp16` (or vice versa) has negligible impact on final PCK: `bf16` has wider dynamic range but lower mantissa precision, while `fp16` is the reverse. When `fp16` is selected, `GradScaler` is activated automatically to prevent gradient underflow. Occasional skipped optimizer steps (overflow detected) are benign and handled silently. PCK evaluation loads the saved `*_best.pt` checkpoint and is independent of training precision.
 
 ### 6.4 Fine-tuning (last blocks) — multi-block sweep
 
@@ -285,7 +293,10 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 - **Code language:** English for identifiers, docstrings, and comments (`docs/info.md`, `data/dataset.py`).
 - **Docs:** `documentation.md` (this file) = system reference; `README.md` = quick start; `docs/info.md` = normative project rules.
 - **Lint:** `ruff` in `pyproject.toml` (line length 100, Python 3.9 syntax target).
-- **Comments:** Public APIs and non-obvious logic should have clear docstrings; line-level coverage varies across legacy modules—improve when touching code.
+- **Comment / docstring policy:**
+  - *First-party code* (`data/`, `training/`, `evaluation/`, `models/common/`, `scripts/`, `utils/`, `tests/`): English only; short module summaries; NumPy-style blocks on public APIs where helpful; sparse `#` comments only for non-obvious logic. Prefer ASCII (hyphens, `x` for dimensions, `->` for flow) in comments and docstrings.
+  - *Vendored backbones* (`models/dinov2/`, `models/dinov3/`, `models/sam/`) and *third-party code* (`third_party/sd4match/`): keep upstream style; do not mass-edit for house consistency.
+- **Check:** `python scripts/audit_first_party_comments.py` (exit 0 if no non-ASCII lines in first-party trees).
 
 ---
 

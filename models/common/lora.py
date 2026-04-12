@@ -23,7 +23,7 @@ class LoRALinear(nn.Module):
 
         y = F.linear(x, W, b) + (alpha / r) * (x @ A^T @ B^T)
 
-    where ``A ∈ R^{r×in}`` and ``B ∈ R^{out×r}``.
+    Shapes: ``A`` is (rank, in_features), ``B`` is (out_features, rank).
     """
 
     def __init__(self, linear: nn.Linear, rank: int, alpha: float) -> None:

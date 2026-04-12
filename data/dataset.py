@@ -10,7 +10,7 @@ This module follows the on-disk layout used by common benchmarks and tooling
 
 - ``train`` (file ``trn.txt``): training only.
 - ``val``: validation / hyperparameter tuning and early stopping.
-- ``test``: **final evaluation only** — do not use for model selection.
+- ``test``: **final evaluation only** - do not use for model selection.
 
 All symbols, docstrings, and comments are in English by project convention.
 """
@@ -322,7 +322,7 @@ def round_side_to_patch_multiple(size: int, patch_size: int) -> int:
     Round a spatial side length to the nearest multiple of ``patch_size``.
 
     This follows the common ViT practice of using input heights/widths divisible by
-    the patch size (e.g., rounding 768 → 770 for patch size 14).
+    the patch size (e.g., rounding 768 -> 770 for patch size 14).
 
     Parameters
     ----------
@@ -572,7 +572,7 @@ def preprocess_pair_images_and_keypoints(
         return src_new, tgt_new, src_k, tgt_k, meta
 
     if mode == PreprocessMode.SCALE_LONGEST_ROUND:
-        # Per-image scaling (src/tgt can differ) — keypoints follow their own image.
+        # Per-image scaling (src/tgt may differ); keypoints follow their image.
         def _scale_round_one(
             im: Image.Image, kps: torch.Tensor
         ) -> Tuple[Image.Image, torch.Tensor, Dict[str, Any]]:

@@ -7,7 +7,7 @@ and must not be used inside a loss during fine-tuning (see ``docs/info.md``).
 The procedure follows GeoAware-SC / "Telling Left from Right" style refinement:
 
 1. Find the discrete peak with ``argmax`` on the similarity map.
-2. Crop a fixed ``window_size × window_size`` window around the peak (with boundary handling).
+2. Crop a square patch of side ``window_size`` around the peak (with boundary handling).
 3. Apply softmax with temperature over the window, then take the expected ``(x, y)``
    position (soft-argmax) in **feature-grid** coordinates.
 4. Convert the refined position to **input image pixel** coordinates (same convention as
@@ -29,7 +29,7 @@ def window_soft_argmax_xy(
     temperature: float = 1.0,
 ) -> torch.Tensor:
     """
-    Refine a single similarity map (``Hf×Wf``) into a sub-pixel ``(x, y)`` in pixel space.
+    Refine one similarity map of shape ``(Hf, Wf)`` to a sub-pixel ``(x, y)`` in pixel space.
 
     Parameters
     ----------

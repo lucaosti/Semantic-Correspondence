@@ -39,9 +39,9 @@ def recommended_dataloader_workers(
     """
     Pick ``num_workers`` to stress host parallelism without going past ``*_worker_cap``.
 
-    * **cuda** — many workers to keep the GPU fed (up to ~¾ of logical CPUs, floored at 8).
-    * **cpu** — about ``max(2, n//4)`` workers (cap 16): prefetch only; main runs the ViT.
-    * **mps / darwin** — capped (spawn cost); still higher than the old default.
+    * **cuda**: many workers to feed the GPU (about 3/4 of logical CPUs, floor 8).
+    * **cpu**: about ``max(2, n//4)`` workers (cap 16); prefetch only, main runs the ViT.
+    * **mps / darwin**: capped (spawn cost); still above legacy defaults.
     """
     n = os.cpu_count() or 4
     if n <= 1:
@@ -102,7 +102,7 @@ def maybe_tune_threads_for_cpu_device(device_type: str, *, dataloader_workers: i
     On CPU-only runs, set PyTorch intra-/inter-op thread pools.
 
     With ``DataLoader(num_workers>0)``, worker processes already use CPU; capping the **main**
-    process thread count reduces oversubscription (many processes × many BLAS threads fighting
+    process thread count reduces oversubscription (many processes x many BLAS threads competing
     for the same cores). With ``dataloader_workers == 0``, all logical CPUs go to PyTorch.
     """
     if device_type != "cpu":
