@@ -40,9 +40,9 @@ Weights are **not** committed to git. Use `scripts/download_pretrained_weights.p
 | `models/common/` | Matching, coords, LoRA, window soft-argmax, `vit_intermediate`, input norm |
 | `models/dinov2/`, `dinov3/`, `sam/` | Backbone implementations; weight loading in `hub_loader.py` / `backbone.py` |
 | `training/` | `losses.py`, `engine.py` (batched Gaussian losses), `unfreeze.py`, `early_stopping.py`, `config.py` |
-| `evaluation/` | `pck.py`, `baseline_eval.py`, `experiment_runner.py`, `visualize.py` (keypoint visualization), checkpoint helpers |
+| `evaluation/` | `baseline_eval.py`, `experiment_runner.py`, `visualize.py` (keypoint visualization), checkpoint helpers |
 | `utils/` | `hardware.py`, `pipeline_state.py`, `paths.py` |
-| `scripts/` | `run_pipeline.py` (orchestrator), `train_finetune.py`, `train_lora.py`, `verify_dataset.py`, `download_pretrained_weights.py` |
+| `scripts/` | `run_pipeline.py` (orchestrator), `train.py` (unified `--mode finetune|lora`), `verify_dataset.py`, `download_pretrained_weights.py` |
 | `docs/` | `info.md` (rules), `references.md` (references). Only `docs/**/*.pdf` is gitignored under `docs/`; `*.md` files are tracked. |
 | `runs/`, `checkpoints/` | Gitignored artifacts: logs, exports, downloaded weights, training checkpoints |
 
@@ -133,7 +133,7 @@ Fine-tuning and LoRA have **separate** batch size controls to avoid silent overw
 
 | Location | Fine-tune default | LoRA default |
 |----------|-------------------|--------------|
-| `train_finetune.py` / `train_lora.py` | `--batch-size` **20** | `--batch-size` **20** |
+| `train.py --mode finetune|lora` | `--batch-size` **20** | `--batch-size` **20** |
 | `run_pipeline.py` | `FT_BATCH_SIZE` **20** | `LORA_BATCH_SIZE` **20** |
 | `training/config.py` dataclasses | **20** | **20** |
 | Per-backbone override (pipeline) | `sam_vit_b` → **4** | `sam_vit_b` → **4** |
@@ -163,7 +163,7 @@ Switching from `bf16` to `fp16` (or vice versa) has negligible impact on final P
 ### 6.5 Data augmentation
 
 Photometric augmentation (`build_photometric_pair_transform` in `data/dataset.py`) is enabled by default for
-**training** datasets in both `train_finetune.py` and `train_lora.py`. The same random color jitter is applied
+**training** datasets in both training modes (`scripts/train.py --mode {finetune,lora}`). The same random color jitter is applied
 identically to source and target images in each pair, following the recommendation in
 [`docs/state-of-art.md`](docs/state-of-art.md). Geometric augmentations are **not** applied because they would
 require consistent keypoint remapping. Validation datasets are **not** augmented.
@@ -182,7 +182,7 @@ Injected on late MLP linears (`models/common/lora.py` + backbone-specific hooks)
 
 ## 7. Evaluation: PCK
 
-**PCK@α** (`evaluation/pck.py`): a keypoint is correct if
+**PCK@α** (sd4match `PCKEvaluator` via `evaluation/experiment_runner.py`): a keypoint is correct if
 
 `‖pred − gt‖₂ ≤ α · pck_threshold`,
 
@@ -201,7 +201,7 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 - **Per-category:** `pck_results_per_category.json` + `pck_results_per_category.csv` — macro (`pck@α`) and micro (`pck_pt@α`) PCK per SPair-71k category per eval run
 - **Per-difficulty:** `pck_results_by_difficulty_flag.json` (viewpoint, scale, truncation, occlusion)
 - **Averaging note:** `pck@α` = per-image mean (macro); `pck_pt@α` = per-keypoint mean (micro) — the standard metric in most SPair-71k papers (Min et al. 2019, CHM, DHPF, CATS). Both are exported to `pck_results.csv` and the per-category CSV.
-- **Training loss curves:** `checkpoints/*_history.jsonl` (per-epoch `train_loss`/`val_loss`, written by `_training_common.py`); loaded by `Analysis_Local.ipynb §11` into `figures/training_loss_history.csv`.
+- **Training loss curves:** `checkpoints/*_history.jsonl` (per-epoch `train_loss`/`val_loss`, written by `_training_common.py`); plotted by `AML_Local.ipynb` / `AML_Colab.ipynb` in the "Training curves" cell.
 
 ---
 

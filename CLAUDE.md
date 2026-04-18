@@ -27,9 +27,9 @@ python scripts/download_pretrained_weights.py    # Fetch DINOv2, DINOv3, SAM wei
 python scripts/run_pipeline.py
 python scripts/run_pipeline.py --config config.yaml   # YAML override
 
-# Standalone training
-python scripts/train_finetune.py --backbone dinov2_vitb14 --last-blocks 2
-python scripts/train_lora.py --backbone dinov2_vitb14 --rank 8
+# Standalone training (unified entry point)
+python scripts/train.py --mode finetune --backbone dinov2_vitb14 --last-blocks 2
+python scripts/train.py --mode lora --backbone dinov2_vitb14 --rank 8
 
 # Tests
 pytest tests/
@@ -43,9 +43,9 @@ pytest tests/test_matching.py    # Single test file
 | Stage | Method | Entry point |
 |-------|--------|-------------|
 | 1 | Training-free (cosine similarity + argmax) | `models/common/matching.py` |
-| 2 | Fine-tune last N transformer blocks (Gaussian CE loss) | `scripts/train_finetune.py` |
+| 2 | Fine-tune last N transformer blocks (Gaussian CE loss) | `scripts/train.py --mode finetune` |
 | 3 | Window Soft-Argmax (WSA) at inference, no retraining | `models/common/window_soft_argmax.py` |
-| 4 | LoRA on late MLP layers | `scripts/train_lora.py` + `models/common/lora.py` |
+| 4 | LoRA on late MLP layers | `scripts/train.py --mode lora` + `models/common/lora.py` |
 
 ### Core Inference Flow
 
@@ -70,7 +70,7 @@ pytest tests/test_matching.py    # Single test file
 
 ### Evaluation
 
-`evaluation/experiment_runner.py` (`run_spair_pck_eval()`): PCK@alpha at thresholds {0.05, 0.1, 0.2}, per-image/point/category/difficulty. Supports SD4Match backend (default) and native backend. Exports JSON/CSV to `runs/pipeline_exports/`.
+`evaluation/experiment_runner.py` (`run_spair_pck_eval()`): PCK@alpha at thresholds {0.05, 0.1, 0.2}, per-image/point/category/difficulty, using the SD4Match backend. Exports JSON/CSV to `runs/pipeline_exports/`.
 
 ### Hardware
 

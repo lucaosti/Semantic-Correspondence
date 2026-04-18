@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
-"""
-LoRA fine-tuning on SPair-71k (Task 4, parameter-efficient adaptation).
+"""Unified training entry point for SPair-71k.
 
-Only LoRA parameters on the last blocks' MLP linear layers are optimized by default
-(see :func:`models.common.lora.apply_lora_to_last_blocks_mlp`).
+``--mode finetune``: fine-tune the last N transformer blocks (Task 2).
+``--mode lora``: LoRA adapters on the last N blocks' MLP linears (Task 4).
 
-When this training runs via the orchestrated pipeline (`scripts/run_pipeline.py`), the
-pipeline passes explicit ``--epochs`` / ``--patience`` values, overriding this script's
-standalone defaults (see `documentation.md`, section 8.2).
-
-**Splits:** train on ``train``, early-stop / monitor on ``val``, report on ``test`` via ``scripts/run_pipeline.py``.
+Split discipline: train on ``train``, early-stop / monitor on ``val``; report ``test`` via
+``scripts/run_pipeline.py``.
 """
 
 from __future__ import annotations
@@ -21,7 +17,12 @@ import sys
 import torch
 from torch.utils.data import DataLoader
 
-from data.dataset import PreprocessMode, SPair71kPairDataset, build_photometric_pair_transform, spair_collate_fn
+from data.dataset import (
+    PreprocessMode,
+    SPair71kPairDataset,
+    build_photometric_pair_transform,
+    spair_collate_fn,
+)
 from data.paths import resolve_spair_root
 from models.common.lora import (
     apply_lora_to_last_blocks_mlp,
@@ -31,7 +32,12 @@ from models.common.lora import (
 from scripts._training_common import build_backbone, run_gaussian_training_loop
 from training.early_stopping import EarlyStopping
 from training.engine import correspondence_gaussian_loss_dino_vit, correspondence_gaussian_loss_sam
-from training.unfreeze import freeze_all, unfreeze_parameters
+from training.unfreeze import (
+    collect_trainable_parameter_groups,
+    freeze_all,
+    unfreeze_last_transformer_blocks,
+    unfreeze_parameters,
+)
 from utils.hardware import (
     apply_accelerator_throughput_tweaks,
     dataloader_extra_kwargs,
@@ -44,7 +50,8 @@ from utils.hardware import (
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="LoRA fine-tuning (Task 4) on ViT-B backbones.")
+    p = argparse.ArgumentParser(description="Train on SPair-71k (finetune or LoRA).")
+    p.add_argument("--mode", choices=["finetune", "lora"], required=True)
     p.add_argument("--spair-root", type=str, default=None)
     p.add_argument(
         "--backbone",
@@ -54,61 +61,29 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--dinov2-weights", type=str, default=None)
     p.add_argument("--dinov3-weights", type=str, default=None)
-    p.add_argument("--sam-checkpoint", type=str, default=None, help="Required for sam_vit_b.")
-    p.add_argument("--last-blocks", type=int, default=2, help="How many terminal blocks receive LoRA on MLP linears.")
-    p.add_argument("--rank", type=int, default=8)
-    p.add_argument("--alpha", type=float, default=16.0)
-    p.add_argument("--epochs", type=int, default=50, help="Upper bound on epochs; early stopping typically triggers earlier.")
-    p.add_argument(
-        "--batch-size",
-        type=int,
-        default=20,
-        help="Pairs per optimizer step (Gaussian loss averages over the batch).",
-    )
-    p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument(
-        "--num-workers",
-        type=int,
-        default=1,
-        help="DataLoader workers (1 = safe default; -1 = auto from CPU count and OS).",
-    )
+    p.add_argument("--sam-checkpoint", type=str, default=None)
+    p.add_argument("--last-blocks", type=int, default=2)
+    p.add_argument("--rank", type=int, default=8, help="LoRA rank (lora mode only).")
+    p.add_argument("--alpha", type=float, default=16.0, help="LoRA alpha (lora mode only).")
+    p.add_argument("--epochs", type=int, default=50)
+    p.add_argument("--batch-size", type=int, default=20)
+    p.add_argument("--lr", type=float, default=None,
+                   help="Default: 5e-5 for finetune, 1e-3 for LoRA.")
+    p.add_argument("--weight-decay", type=float, default=0.01,
+                   help="AdamW weight decay (finetune only; LoRA uses 0).")
+    p.add_argument("--num-workers", type=int, default=1)
     p.add_argument("--preprocess", type=str, default="FIXED_RESIZE")
-    p.add_argument("--height", type=int, default=784, help="Input height (multiple of patch). Typical: DINOv2 518, DINOv3/SAM 512. Default 784.")
+    p.add_argument("--height", type=int, default=784)
     p.add_argument("--width", type=int, default=784)
     p.add_argument("--patience", type=int, default=7)
-    p.add_argument(
-        "--layer-indices",
-        type=int,
-        default=4,
-        help="Intermediate ViT layer for DINO feature extraction (ignored for sam_vit_b).",
-    )
+    p.add_argument("--layer-indices", type=int, default=4)
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     p.add_argument("--device", type=str, default=None)
-    p.add_argument(
-        "--precision",
-        type=str,
-        default="auto",
-        choices=["auto", "fp32", "bf16", "fp16"],
-        help="Training precision policy. 'auto' picks bf16/fp16 on CUDA and fp32 otherwise.",
-    )
-    p.add_argument(
-        "--log-batch-interval",
-        type=int,
-        default=100,
-        help="Print training batch progress every N steps (0 = only epoch summaries).",
-    )
-    p.add_argument(
-        "--resume",
-        type=str,
-        default=None,
-        help="Load *_resume.pt (model + optimizer + epoch + early-stopping state) and continue training.",
-    )
-    p.add_argument(
-        "--resume-save-interval",
-        type=int,
-        default=100,
-        help="Save *_resume.pt every N training batches within an epoch (0 = only at end of each epoch).",
-    )
+    p.add_argument("--precision", type=str, default="auto",
+                   choices=["auto", "fp32", "bf16", "fp16"])
+    p.add_argument("--log-batch-interval", type=int, default=100)
+    p.add_argument("--resume", type=str, default=None)
+    p.add_argument("--resume-save-interval", type=int, default=100)
     return p.parse_args()
 
 
@@ -120,9 +95,7 @@ def main() -> int:
     root = resolve_spair_root(args.spair_root)
     if not os.path.isdir(root):
         print(f"ERROR: SPair-71k not found at: {root}", file=sys.stderr)
-        print("Extract the dataset into <repo>/data/SPair-71k (see data/SPair-71k/README.md).", file=sys.stderr)
         return 2
-
     if args.backbone == "sam_vit_b" and args.sam_checkpoint is None:
         print("ERROR: --sam-checkpoint is required for backbone sam_vit_b.", file=sys.stderr)
         return 2
@@ -130,6 +103,7 @@ def main() -> int:
     device = torch.device(resolve_device_str(args.device))
     num_workers = resolve_num_workers(args.num_workers, accelerator=device.type)
     maybe_tune_threads_for_cpu_device(device.type, dataloader_workers=num_workers)
+
     model = build_backbone(
         args.backbone,
         dinov2_weights=args.dinov2_weights,
@@ -139,23 +113,55 @@ def main() -> int:
     apply_accelerator_throughput_tweaks(device)
 
     freeze_all(model)
-    if args.backbone == "sam_vit_b":
-        lora_params = apply_lora_to_last_blocks_mlp_sam(
-            model,
-            last_n_blocks=args.last_blocks,
-            rank=args.rank,
-            alpha=args.alpha,
-        )
-    else:
-        lora_params = apply_lora_to_last_blocks_mlp(
-            model,
-            last_n_blocks=args.last_blocks,
-            rank=args.rank,
-            alpha=args.alpha,
-        )
-    unfreeze_parameters(lora_params)
+    os.makedirs(args.checkpoint_dir, exist_ok=True)
 
-    opt = torch.optim.AdamW(lora_params, lr=args.lr, weight_decay=0.0)
+    if args.mode == "finetune":
+        unfreeze_last_transformer_blocks(model, n_blocks=args.last_blocks)
+        lr = args.lr if args.lr is not None else 5e-5
+        opt = torch.optim.AdamW(
+            collect_trainable_parameter_groups(model, base_lr=lr),
+            weight_decay=args.weight_decay,
+        )
+        tag = f"{args.backbone}_lastblocks{args.last_blocks}"
+        history_name = f"{args.backbone}_ft_lb{args.last_blocks}_history.jsonl"
+        extra_resume_payload = None
+        epoch_log_suffix = None
+        script_tag = "train_finetune"
+
+        def _save_best(epoch: int, val_loss: float) -> None:
+            ckpt = os.path.join(args.checkpoint_dir, f"{tag}_best.pt")
+            torch.save({"model": model.state_dict(), "epoch": epoch, "val_loss": val_loss}, ckpt)
+
+    else:  # lora
+        if args.backbone == "sam_vit_b":
+            lora_params = apply_lora_to_last_blocks_mlp_sam(
+                model, last_n_blocks=args.last_blocks, rank=args.rank, alpha=args.alpha,
+            )
+        else:
+            lora_params = apply_lora_to_last_blocks_mlp(
+                model, last_n_blocks=args.last_blocks, rank=args.rank, alpha=args.alpha,
+            )
+        unfreeze_parameters(lora_params)
+        lr = args.lr if args.lr is not None else 1e-3
+        opt = torch.optim.AdamW(lora_params, lr=lr, weight_decay=0.0)
+
+        tag = f"{args.backbone}_lora_r{args.rank}"
+        history_name = f"{tag}_history.jsonl"
+        lora_meta = {"rank": args.rank, "alpha": args.alpha, "last_blocks": args.last_blocks}
+        extra_resume_payload = {"lora": lora_meta}
+        script_tag = "train_lora"
+
+        def _save_best(epoch: int, val_loss: float) -> None:
+            path = os.path.join(args.checkpoint_dir, f"{tag}_best.pt")
+            torch.save(
+                {"model": model.state_dict(), "epoch": epoch, "val_loss": val_loss, "lora": lora_meta},
+                path,
+            )
+
+        def _epoch_suffix() -> str:
+            return f" | lora_params={len(lora_trainable_parameters(model))}"
+
+        epoch_log_suffix = _epoch_suffix
 
     mode = PreprocessMode[args.preprocess.strip().upper()]
     train_ds = SPair71kPairDataset(
@@ -188,6 +194,8 @@ def main() -> int:
         **dl_kw,
     )
 
+    stopper = EarlyStopping(patience=args.patience, mode="min")
+    resume_path = os.path.join(args.checkpoint_dir, f"{tag}_resume.pt")
     layer_indices = args.layer_indices
     use_sam = args.backbone == "sam_vit_b"
 
@@ -195,28 +203,6 @@ def main() -> int:
         if use_sam:
             return correspondence_gaussian_loss_sam(model, batch_tensors)
         return correspondence_gaussian_loss_dino_vit(model, batch_tensors, layer_indices=layer_indices)
-
-    stopper = EarlyStopping(patience=args.patience, mode="min")
-    os.makedirs(args.checkpoint_dir, exist_ok=True)
-    resume_path = os.path.join(
-        args.checkpoint_dir, f"{args.backbone}_lora_r{args.rank}_resume.pt"
-    )
-    lora_meta = {"rank": args.rank, "alpha": args.alpha, "last_blocks": args.last_blocks}
-
-    def _save_best(epoch: int, val_loss: float) -> None:
-        path = os.path.join(args.checkpoint_dir, f"{args.backbone}_lora_r{args.rank}_best.pt")
-        torch.save(
-            {
-                "model": model.state_dict(),
-                "epoch": epoch,
-                "val_loss": val_loss,
-                "lora": lora_meta,
-            },
-            path,
-        )
-
-    def _epoch_suffix() -> str:
-        return f" | lora_params={len(lora_trainable_parameters(model))}"
 
     run_gaussian_training_loop(
         model=model,
@@ -237,16 +223,13 @@ def main() -> int:
         resume_save_interval=args.resume_save_interval,
         resume_arg=args.resume,
         precision=args.precision,
-        script_tag="train_lora",
+        script_tag=script_tag,
         collate_fn=spair_collate_fn,
-        extra_resume_payload={"lora": lora_meta},
+        extra_resume_payload=extra_resume_payload,
         save_best_checkpoint=_save_best,
-        epoch_log_suffix=_epoch_suffix,
+        epoch_log_suffix=epoch_log_suffix,
         log_preamble_extra=f"backbone={args.backbone} ",
-        history_path=os.path.join(
-            args.checkpoint_dir,
-            f"{args.backbone}_lora_r{args.rank}_history.jsonl",
-        ),
+        history_path=os.path.join(args.checkpoint_dir, history_name),
     )
     return 0
 

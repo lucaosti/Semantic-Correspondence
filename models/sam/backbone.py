@@ -1,64 +1,57 @@
-"""
-SAM ViT-B image encoder — implementation under ``models/sam/`` (see ``PAPERS.md``).
-
-Uses ``ImageEncoderViT`` from the integrated Segment Anything modeling code; the full
-``Sam`` model is built to load official checkpoints, then only ``image_encoder`` is returned.
-"""
+"""SAM ViT-B image encoder (only the encoder is kept — mask/prompt branches are unused)."""
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.sam.build_sam import build_sam_vit_b
+from models.sam.modeling.image_encoder import ImageEncoderViT
 
 
 def build_sam_vit_b_image_encoder(
     *,
     checkpoint_path: Optional[str] = None,
 ) -> nn.Module:
-    """
-    Build **only** the SAM ViT-B image encoder (``vit_b``).
-
-    Parameters
-    ----------
-    checkpoint_path:
-        Optional path to the official ``sam_vit_b_01ec64.pth`` checkpoint. If ``None``,
-        the full SAM is randomly initialized (encoder weights not trained — use only for tests).
-
-    Returns
-    -------
-    torch.nn.Module
-        ``ImageEncoderViT`` module (neck output channels = 256).
-    """
-    sam = build_sam_vit_b(checkpoint=checkpoint_path)
-    enc = sam.image_encoder
-    enc.eval()
-    return enc
+    """Build ``ImageEncoderViT`` (SAM ViT-B) and load the ``image_encoder.*`` weights."""
+    encoder = ImageEncoderViT(
+        depth=12,
+        embed_dim=768,
+        img_size=1024,
+        mlp_ratio=4,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        num_heads=12,
+        patch_size=16,
+        qkv_bias=True,
+        use_rel_pos=True,
+        global_attn_indexes=[2, 5, 8, 11],
+        window_size=14,
+        out_chans=256,
+    )
+    if checkpoint_path is not None:
+        try:
+            state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        except TypeError:
+            state = torch.load(checkpoint_path, map_location="cpu")
+        prefix = "image_encoder."
+        encoder_state = {
+            k[len(prefix):]: v for k, v in state.items() if k.startswith(prefix)
+        }
+        missing, unexpected = encoder.load_state_dict(encoder_state, strict=False)
+        if missing:
+            raise RuntimeError(f"Missing SAM image_encoder weights: {missing[:5]}...")
+    encoder.eval()
+    return encoder
 
 
 def extract_dense_grid_sam(
     image_encoder: nn.Module,
     x_sam: torch.Tensor,
 ) -> Tuple[torch.Tensor, Dict[str, Any]]:
-    """
-    Run SAM's image encoder and L2-normalize channels for cosine matching.
-
-    Parameters
-    ----------
-    image_encoder:
-        SAM ``ImageEncoderViT`` module.
-    x_sam:
-        ``(B, 3, 1024, 1024)`` tensor in SAM input space (see ``models.common.input_norm``).
-
-    Returns
-    -------
-    tuple[torch.Tensor, dict]
-        ``(B, C, Hf, Wf)`` normalized features and metadata.
-    """
+    """Run the SAM image encoder and L2-normalize channels for cosine matching."""
     feats = image_encoder(x_sam)
     if feats.dim() != 4:
         raise ValueError(f"Unexpected SAM encoder output rank: {feats.dim()}.")

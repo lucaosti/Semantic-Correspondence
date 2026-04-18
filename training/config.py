@@ -1,9 +1,9 @@
 """
 Training configuration dataclasses (fine-tuning and PEFT).
 
-Note: these defaults reflect the *standalone* training CLIs (`scripts/train_finetune.py`,
-`scripts/train_lora.py`). When using the orchestrated pipeline (`scripts/run_pipeline.py`),
-epochs/patience are overridden by the pipeline constants (see `documentation.md`, section 8.2).
+Note: these defaults reflect the standalone CLI (`scripts/train.py --mode {finetune,lora}`).
+When using the orchestrated pipeline (`scripts/run_pipeline.py`), epochs/patience are overridden
+by the pipeline constants (see `documentation.md`, section 8.2).
 """
 
 from __future__ import annotations

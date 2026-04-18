@@ -27,7 +27,7 @@ def load_encoder_weights_from_pt(
     extractor:
         Dense feature wrapper whose ``encoder`` will receive weights.
     checkpoint_path:
-        Path to ``.pt`` / ``.pth`` from ``train_finetune.py`` or ``train_lora.py``.
+        Path to ``.pt`` / ``.pth`` from ``scripts/train.py`` (finetune or LoRA mode).
     map_location:
         Forwarded to :func:`torch.load`.
 

@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-from .dino_head import DINOHead
 from .layer_scale import LayerScale
 from .mlp import Mlp
 from .patch_embed import PatchEmbed

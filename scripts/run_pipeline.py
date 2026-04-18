@@ -1,27 +1,19 @@
 #!/usr/bin/env python3
-"""
-Orchestrate dataset verify, fine-tune, LoRA, PCK evaluation, exports, and optional pytest.
+"""Orchestrate dataset verify, train (finetune + LoRA), PCK eval, exports, pytest.
 
 Run: ``python scripts/run_pipeline.py`` or ``python scripts/run_pipeline.py --config config.yaml``.
-YAML overrides the in-file defaults (same keys as notebook ``config.yaml``). Edit booleans and
-3-tuples below; slots are always (DINOv2 ViT-B/14, DINOv3 ViT-B/16, SAM ViT-B).
-
-SAM needs ``checkpoints/sam_vit_b_01ec64.pth`` (from ``scripts/download_pretrained_weights.py``)
-or ``SAM_CHECKPOINT`` / the in-script path.
-
+YAML overrides the in-file defaults (same keys as notebook ``config.yaml``). Triplet toggles
+are ``(DINOv2 ViT-B/14, DINOv3 ViT-B/16, SAM ViT-B)``. SAM needs
+``checkpoints/sam_vit_b_01ec64.pth`` (from ``scripts/download_pretrained_weights.py``).
 Logs: ``runs/logs/pipeline_<utc>.log``, ``runs/logs/current.log``, ``runs/logs/stage_events.jsonl``.
-Resume: ``PIPELINE_RESUME`` plus ``runs/pipeline_state.json`` and ``*_resume.pt`` (in-epoch saves
-every ``RESUME_SAVE_INTERVAL`` / training ``--resume-save-interval`` batches). Config fingerprint
-mismatch clears stale state. Full reset: ``SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1``. Stdout mirror
-off: ``SEMANTIC_CORRESPONDENCE_PIPELINE_LOG_FILE_ONLY=1`` (tail ``current.log``).
-
-Defaults: DINO batch 20, SAM 4 via per-backbone maps; ``PRECISION`` auto/fp32/bf16/fp16;
-``DEVICE`` / ``NUM_WORKERS`` ``None`` for auto. Fine-tune sweeps ``LAST_BLOCKS_LIST``. Detail:
-``documentation.md``.
+Resume: ``runs/pipeline_state.json`` + ``*_resume.pt`` (saved every
+``RESUME_SAVE_INTERVAL`` / ``--resume-save-interval`` batches). Config-fingerprint mismatch
+preserves completed steps; full reset via ``SEMANTIC_CORRESPONDENCE_PIPELINE_RESET=1``.
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import os
@@ -35,70 +27,36 @@ _REPO = Path(__file__).resolve().parents[1]
 _SAM_VIT_B_DEFAULT = _REPO / "checkpoints" / "sam_vit_b_01ec64.pth"
 
 # =============================================================================
-# PIPELINE TOGGLES - edit True/False or 3-tuples (DINOv2, DINOv3, SAM)
+# TOGGLES — triplets follow (DINOv2, DINOv3, SAM)
 # =============================================================================
 
-# Skip pipeline stages already finished (see ``runs/pipeline_state.json``); resume training epochs
-# via ``*_resume.pt`` when present. Set False to always run every stage from the top.
 PIPELINE_RESUME: bool = True
-
-# Run ``scripts/verify_dataset.py`` before anything else (recommended).
 RUN_VERIFY_DATASET: bool = True
-
-# Fine-tune last blocks (one bool per backbone slot).
 TRAIN_FINETUNE: Tuple[bool, bool, bool] = (True, True, True)
-
-# LoRA on last MLP linears (one bool per backbone slot).
 TRAIN_LORA: Tuple[bool, bool, bool] = (True, True, True)
-
-# Baseline PCK evaluation (no checkpoint) via ``evaluation.experiment_runner`` (same as CLI eval).
 RUN_EVAL_BASELINE: Tuple[bool, bool, bool] = (True, True, True)
-
-# Same, but with window soft-argmax (Task 3, inference-only).
 RUN_EVAL_BASELINE_WSA: Tuple[bool, bool, bool] = (True, True, True)
-
-# If True, add an eval row loading a fine-tuned checkpoint for that backbone (path below).
 RUN_EVAL_FINETUNED_CHECKPOINT: Tuple[bool, bool, bool] = (True, True, True)
-
-# If True, add an eval row loading a LoRA checkpoint for that backbone (path below).
 RUN_EVAL_LORA_CHECKPOINT: Tuple[bool, bool, bool] = (True, True, True)
-
-# WSA on fine-tuned checkpoints (Task 3 applied to Task 2 models).
 RUN_EVAL_FINETUNED_WSA: Tuple[bool, bool, bool] = (True, True, True)
-
-# WSA on LoRA checkpoints (Task 3 applied to Task 4 models).
 RUN_EVAL_LORA_WSA: Tuple[bool, bool, bool] = (True, True, True)
-
-# Export PCK results to ``runs/pipeline_exports/`` (JSON + CSV) when any eval step runs.
 RUN_EXPORT_METRICS_TABLES: bool = True
-
-# Run unit tests (requires ``pip install -e ".[dev]"``).
 RUN_PYTEST: bool = True
 
 # =============================================================================
-# SHARED CONFIG - paths, training, evaluation
+# SHARED CONFIG
 # =============================================================================
 
-# ``None``: ``data/paths.resolve_spair_root()`` (env ``SPAIR_ROOT`` or default under ``data/``).
 SPAIR_ROOT: Optional[str] = None
-
-# Dataset and PCK metrics backend ("sd4match" | "native").
-DATASET_BACKEND: str = "sd4match"  # "sd4match" | "native"
-METRICS_BACKEND: str = "sd4match"  # "sd4match" | "native"
-
 CHECKPOINT_DIR: str = "checkpoints"
-# Fine-tune sweep: train separate checkpoints per last-blocks value.
 LAST_BLOCKS_LIST: List[int] = [1, 2, 4]
 LORA_RANK: int = 8
 LORA_LAST_BLOCKS: int = 2
 
-# Optional official weight files. SAM: defaults to ``checkpoints/sam_vit_b_01ec64.pth`` if that
-# file exists; else set this or ``export SAM_CHECKPOINT=...`` when the SAM slot is enabled.
 DINOV2_WEIGHTS: Optional[str] = None
 DINOV3_WEIGHTS: Optional[str] = None
 SAM_CHECKPOINT: Optional[str] = str(_SAM_VIT_B_DEFAULT) if _SAM_VIT_B_DEFAULT.is_file() else None
 
-# Training hyperparameters (passed through to ``train_finetune.py`` / ``train_lora.py``).
 FT_BATCH_SIZE: int = 20
 FT_EPOCHS: int = 50
 FT_PATIENCE: int = 7
@@ -110,56 +68,36 @@ LORA_PATIENCE: int = 7
 LORA_LR: float = 1e-3
 LORA_ALPHA: float = 16.0
 PRECISION: str = "auto"
-# SAM encoder is VRAM-heavy at 512x512; keep its batch at 4.
 FT_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {"sam_vit_b": 4}
 LORA_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {"sam_vit_b": 4}
-# Save training resume files every N batches within an epoch.
-# Lower values improve resumability on preemptible runtimes (e.g., Colab).
 RESUME_SAVE_INTERVAL: int = 50
-# Training scripts print batch progress every N steps (0 = epoch summaries only).
-# Lower on CPU-only hosts so logs/dashboard move often (each step is slow).
 LOG_BATCH_INTERVAL: int = 50
-# Intermediate ViT layer for DINO feature extraction (passed as --layer-indices to training scripts).
 DINO_LAYER_INDICES: int = 4
 PREPROCESS: str = "FIXED_RESIZE"
-# Per-backbone image sizes: exact multiples of each backbone's patch size.
-# DINOv2 patch 14: 518 = 37*14. DINOv3 patch 16: 512 = 32*16. SAM patch 16: 512 (encoder uses 1024x1024 internally).
 IMAGE_SIZE_BY_BACKBONE: Dict[str, Tuple[int, int]] = {
     "dinov2_vitb14": (518, 518),
     "dinov3_vitb16": (512, 512),
     "sam_vit_b": (512, 512),
 }
-# Global fallback if backbone not in IMAGE_SIZE_BY_BACKBONE (784 = 56*14 = 49*16).
 IMAGE_HEIGHT: int = 784
 IMAGE_WIDTH: int = 784
-# ``None``: :func:`utils.hardware.recommended_dataloader_workers`
 NUM_WORKERS: Optional[int] = None
-# ``None``: CUDA if available, else MPS, else CPU
 DEVICE: Optional[str] = None
 
-# Evaluation split: ``test`` for benchmark numbers (see ``docs/info.md``); use ``val`` for faster runs.
 EVAL_SPLIT: str = "test"
-EVAL_LIMIT: int = 0  # >0: only first N pairs per run (debug)
-# PCK alpha thresholds.
+EVAL_LIMIT: int = 0
 EVAL_ALPHAS: Tuple[float, ...] = (0.05, 0.1, 0.2)
-
-# Window soft-argmax knobs.
 WSA_WINDOW: int = 5
 WSA_TEMPERATURE: float = 1.0
 
-# =============================================================================
-# Backbone order (do not change; matches tuple positions above)
-# =============================================================================
-
 BACKBONE_NAMES: Tuple[str, str, str] = ("dinov2_vitb14", "dinov3_vitb16", "sam_vit_b")
-_ALLOWED_PRECISION: Tuple[str, str, str, str] = ("auto", "fp32", "bf16", "fp16")
+_ALLOWED_PRECISION: Tuple[str, ...] = ("auto", "fp32", "bf16", "fp16")
 
 
 def _normalize_precision_token(value: Any) -> str:
     token = str(value).strip().lower()
     if token not in _ALLOWED_PRECISION:
-        allowed = ", ".join(_ALLOWED_PRECISION)
-        raise ValueError(f"PRECISION must be one of: {allowed}. Got {value!r}.")
+        raise ValueError(f"PRECISION must be one of: {', '.join(_ALLOWED_PRECISION)}. Got {value!r}.")
     return token
 
 
@@ -170,8 +108,7 @@ def _parse_backbone_int_map(name: str, value: Any) -> Dict[str, int]:
     for k, v in value.items():
         backbone = str(k).strip()
         if backbone not in BACKBONE_NAMES:
-            known = ", ".join(BACKBONE_NAMES)
-            raise ValueError(f"{name} contains unknown backbone {backbone!r}. Expected one of: {known}.")
+            raise ValueError(f"{name} contains unknown backbone {backbone!r}.")
         iv = int(v)
         if iv < 1:
             raise ValueError(f"{name}[{backbone!r}] must be >= 1, got {iv}.")
@@ -180,7 +117,6 @@ def _parse_backbone_int_map(name: str, value: Any) -> Dict[str, int]:
 
 
 def _resolve_image_hw(backbone: str) -> Tuple[int, int]:
-    """Return ``(height, width)`` for ``backbone``, using per-backbone override or global fallback."""
     if backbone in IMAGE_SIZE_BY_BACKBONE:
         return IMAGE_SIZE_BY_BACKBONE[backbone]
     return (IMAGE_HEIGHT, IMAGE_WIDTH)
@@ -196,16 +132,12 @@ def _resolve_batch_size(stage: str, backbone: str) -> int:
 
 def _triplet_bool(name: str, value: Any) -> Tuple[bool, bool, bool]:
     if not isinstance(value, (list, tuple)) or len(value) != 3:
-        raise ValueError(f"{name} must be a length-3 list/tuple of booleans (DINOv2, DINOv3, SAM), got {value!r}")
+        raise ValueError(f"{name} must be a length-3 list/tuple of booleans, got {value!r}")
     return (bool(value[0]), bool(value[1]), bool(value[2]))
 
 
 def _apply_pipeline_yaml(path: Path) -> None:
-    """Load a Colab/notebook-style YAML file and override module-level pipeline settings."""
-    try:
-        import yaml
-    except ImportError as exc:  # pragma: no cover - PyYAML is a declared dependency
-        raise ImportError("PyYAML is required for --config (pip install pyyaml).") from exc
+    import yaml
 
     path = path.expanduser().resolve()
     with open(path, "r", encoding="utf-8") as f:
@@ -214,13 +146,6 @@ def _apply_pipeline_yaml(path: Path) -> None:
         raise TypeError(f"Expected a YAML mapping in {path}, got {type(raw).__name__}")
 
     g = globals()
-
-    ds = raw.get("dataset") or {}
-    if isinstance(ds, dict):
-        if ds.get("backend") is not None:
-            g["DATASET_BACKEND"] = str(ds["backend"])
-        if ds.get("metrics_backend") is not None:
-            g["METRICS_BACKEND"] = str(ds["metrics_backend"])
 
     paths = raw.get("paths") or {}
     if isinstance(paths, dict):
@@ -249,23 +174,17 @@ def _apply_pipeline_yaml(path: Path) -> None:
             if isinstance(raw_map, dict):
                 current = dict(g.get("IMAGE_SIZE_BY_BACKBONE", {}))
                 for k, v in raw_map.items():
-                    backbone_k = str(k).strip()
-                    if backbone_k not in BACKBONE_NAMES:
-                        raise ValueError(
-                            f"runtime.image_size_by_backbone: unknown backbone {backbone_k!r}. "
-                            f"Expected one of: {', '.join(BACKBONE_NAMES)}."
-                        )
+                    bk = str(k).strip()
+                    if bk not in BACKBONE_NAMES:
+                        raise ValueError(f"unknown backbone {bk!r} in image_size_by_backbone.")
                     if not (isinstance(v, (list, tuple)) and len(v) == 2):
-                        raise ValueError(
-                            f"runtime.image_size_by_backbone[{backbone_k!r}] must be [h, w], got {v!r}."
-                        )
-                    current[backbone_k] = (int(v[0]), int(v[1]))
+                        raise ValueError(f"image_size_by_backbone[{bk!r}] must be [h, w].")
+                    current[bk] = (int(v[0]), int(v[1]))
                 g["IMAGE_SIZE_BY_BACKBONE"] = current
         if runtime.get("limit_pairs") is not None:
             g["EVAL_LIMIT"] = int(runtime["limit_pairs"])
         if runtime.get("alphas") is not None:
-            alphas = tuple(float(a) for a in runtime["alphas"])
-            g["EVAL_ALPHAS"] = alphas
+            g["EVAL_ALPHAS"] = tuple(float(a) for a in runtime["alphas"])
         if runtime.get("wsa_window") is not None:
             g["WSA_WINDOW"] = int(runtime["wsa_window"])
         if runtime.get("wsa_temperature") is not None:
@@ -283,10 +202,7 @@ def _apply_pipeline_yaml(path: Path) -> None:
     if isinstance(finetune, dict):
         lb = finetune.get("last_blocks")
         if lb is not None:
-            if isinstance(lb, (list, tuple)):
-                g["LAST_BLOCKS_LIST"] = [int(x) for x in lb]
-            else:
-                g["LAST_BLOCKS_LIST"] = [int(lb)]
+            g["LAST_BLOCKS_LIST"] = [int(x) for x in (lb if isinstance(lb, (list, tuple)) else [lb])]
         if finetune.get("epochs") is not None:
             g["FT_EPOCHS"] = int(finetune["epochs"])
         if finetune.get("patience") is not None:
@@ -351,17 +267,13 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["RUN_EXPORT_METRICS_TABLES"] = bool(toggles["run_export_metrics_tables"])
         if "run_pytest" in toggles:
             g["RUN_PYTEST"] = bool(toggles["run_pytest"])
-    # Optional top-level eval split (some notebook YAMLs use experiments; we only need split)
     if raw.get("eval_split") is not None:
         g["EVAL_SPLIT"] = str(raw["eval_split"])
 
 
 def _fingerprint_payload() -> Dict[str, Any]:
-    """Serializable config for :func:`utils.pipeline_state.fingerprint_from_config`."""
     return {
         "SPAIR_ROOT": SPAIR_ROOT,
-        "DATASET_BACKEND": DATASET_BACKEND,
-        "METRICS_BACKEND": METRICS_BACKEND,
         "CHECKPOINT_DIR": CHECKPOINT_DIR,
         "LAST_BLOCKS_LIST": LAST_BLOCKS_LIST,
         "LORA_RANK": LORA_RANK,
@@ -418,13 +330,12 @@ def _trace_stage(cwd: Path, logger: "PipelineLogger", action: str, stage_id: str
 
 
 def _pipeline_log_file_only() -> bool:
-    """If true, :class:`PipelineLogger` writes only to the log file (for detached + dashboard workflow)."""
     v = os.environ.get("SEMANTIC_CORRESPONDENCE_PIPELINE_LOG_FILE_ONLY", "").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 
 class PipelineLogger:
-    """Timestamped lines to a per-run log file; optionally mirrors to stdout/stderr (interactive runs)."""
+    """Timestamped lines to a per-run log file; optionally mirrors to stdout."""
 
     def __init__(self, path: Path, *, mirror_to_terminal: bool = True) -> None:
         self.path = path.resolve()
@@ -432,8 +343,7 @@ class PipelineLogger:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._fp = open(path, "w", encoding="utf-8")
         self._fp.write(f"# Pipeline run started at {self._ts()}\n")
-        self._fp.write(f"# Log file: {self.path}\n")
-        self._fp.write("# Also see: runs/logs/stage_events.jsonl and runs/pipeline_state.json (resume).\n\n")
+        self._fp.write(f"# Log file: {self.path}\n\n")
         self._fp.flush()
 
     @staticmethod
@@ -461,20 +371,14 @@ class PipelineLogger:
 def _manifest_append(cwd: Path, row: List[str]) -> None:
     manifest = cwd / "runs" / "logs" / "manifest.tsv"
     manifest.parent.mkdir(parents=True, exist_ok=True)
-    line = "\t".join(row) + "\n"
     if not manifest.is_file():
         with open(manifest, "w", encoding="utf-8") as f:
             f.write("timestamp_utc\tevent\tlog_filename\texit_code\n")
     with open(manifest, "a", encoding="utf-8") as f:
-        f.write(line)
-
-
-def _repo_root() -> Path:
-    return _REPO
+        f.write("\t".join(row) + "\n")
 
 
 def _link_current_log_symlink(cwd: Path, log_path: Path) -> None:
-    """Point ``runs/logs/current.log`` at this run so dashboards can reconnect after closing a terminal."""
     link = cwd / "runs" / "logs" / "current.log"
     try:
         if link.is_symlink() or link.exists():
@@ -486,27 +390,16 @@ def _link_current_log_symlink(cwd: Path, log_path: Path) -> None:
 
 def _validate_triplet(name: str, t: Tuple[bool, ...]) -> None:
     if len(t) != 3:
-        raise ValueError(f"{name} must have exactly 3 elements (DINOv2, DINOv3, SAM), got {len(t)}")
-
-
-def _python(cwd: Path) -> str:
-    return sys.executable
+        raise ValueError(f"{name} must have exactly 3 elements, got {len(t)}")
 
 
 def _run_cmd(cwd: Path, cmd: List[str], logger: PipelineLogger) -> int:
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
-    # Keep project root importable for script-style subprocess execution.
-    prev_pythonpath = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = f"{cwd}{os.pathsep}{prev_pythonpath}" if prev_pythonpath else str(cwd)
+    env["PYTHONPATH"] = f"{cwd}{os.pathsep}{env['PYTHONPATH']}" if env.get("PYTHONPATH") else str(cwd)
     logger.log_line(f"--- Running: {' '.join(cmd)}")
     p = subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        env=env,
+        cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1, env=env,
     )
     if p.stdout is None:
         return p.wait()
@@ -515,14 +408,8 @@ def _run_cmd(cwd: Path, cmd: List[str], logger: PipelineLogger) -> int:
     return p.wait()
 
 
-def _run_script(
-    cwd: Path,
-    rel_script: str,
-    args: Sequence[str],
-    logger: PipelineLogger,
-) -> int:
-    cmd = [_python(cwd), str(cwd / rel_script), *args]
-    return _run_cmd(cwd, cmd, logger)
+def _run_script(cwd: Path, rel_script: str, args: Sequence[str], logger: PipelineLogger) -> int:
+    return _run_cmd(cwd, [sys.executable, str(cwd / rel_script), *args], logger)
 
 
 def _default_finetune_ckpt_for(cwd: Path, backbone: str, n_blocks: int) -> str:
@@ -540,24 +427,17 @@ def _resolve_ckpt_path(cwd: Path, path_str: str) -> Optional[str]:
 
 
 def _build_eval_specs(
-    cwd: Path,
-    sam_checkpoint: Optional[str],
-    logger: PipelineLogger,
-    *,
-    num_workers: int,
+    cwd: Path, sam_checkpoint: Optional[str], logger: PipelineLogger, *, num_workers: int,
 ) -> List[Any]:
     from evaluation.experiment_runner import EvalRunSpec
 
     specs: List[EvalRunSpec] = []
-    triples: List[Tuple[str, int]] = list(zip(BACKBONE_NAMES, range(3)))
 
     def _base_kwargs(backbone: str) -> Dict[str, Any]:
         h, w = _resolve_image_hw(backbone)
         return dict(
             backbone=backbone,
             split=EVAL_SPLIT,
-            dataset_backend=DATASET_BACKEND,
-            metrics_backend=METRICS_BACKEND,
             dinov2_weights=DINOV2_WEIGHTS,
             dinov3_weights=DINOV3_WEIGHTS,
             sam_checkpoint=sam_checkpoint,
@@ -568,18 +448,16 @@ def _build_eval_specs(
             num_workers=num_workers,
         )
 
-    for backbone, idx in triples:
-        if backbone == "sam_vit_b" and not sam_checkpoint:
-            any_sam = (
-                RUN_EVAL_BASELINE[idx] or RUN_EVAL_BASELINE_WSA[idx]
-                or RUN_EVAL_FINETUNED_CHECKPOINT[idx] or RUN_EVAL_LORA_CHECKPOINT[idx]
-                or RUN_EVAL_FINETUNED_WSA[idx] or RUN_EVAL_LORA_WSA[idx]
+    for idx, backbone in enumerate(BACKBONE_NAMES):
+        any_sam_flag = any(
+            t[idx] for t in (
+                RUN_EVAL_BASELINE, RUN_EVAL_BASELINE_WSA, RUN_EVAL_FINETUNED_CHECKPOINT,
+                RUN_EVAL_LORA_CHECKPOINT, RUN_EVAL_FINETUNED_WSA, RUN_EVAL_LORA_WSA,
             )
-            if any_sam:
-                logger.log_line(
-                    f"WARNING: skipping SAM eval for {backbone}: set SAM_CHECKPOINT.",
-                    err=True,
-                )
+        )
+        if backbone == "sam_vit_b" and not sam_checkpoint:
+            if any_sam_flag:
+                logger.log_line(f"WARNING: skipping SAM eval for {backbone}: set SAM_CHECKPOINT.", err=True)
             continue
 
         bk = _base_kwargs(backbone)
@@ -595,67 +473,45 @@ def _build_eval_specs(
                 **bk,
             ))
 
-        # Fine-tuned: one eval spec per last-blocks checkpoint.
         for nb in LAST_BLOCKS_LIST:
             ck_path = _default_finetune_ckpt_for(cwd, backbone, nb)
             ck = _resolve_ckpt_path(cwd, ck_path)
-
             if RUN_EVAL_FINETUNED_CHECKPOINT[idx]:
                 if not ck:
-                    logger.log_line(
-                        f"WARNING: fine-tuned checkpoint not found: {ck_path}",
-                        err=True,
-                    )
+                    logger.log_line(f"WARNING: fine-tuned checkpoint not found: {ck_path}", err=True)
                 else:
-                    specs.append(EvalRunSpec(
-                        name=f"{backbone}_ft_lb{nb}",
-                        checkpoint=ck,
-                        **bk,
-                    ))
-
-            if RUN_EVAL_FINETUNED_WSA[idx]:
-                if ck:
-                    specs.append(EvalRunSpec(
-                        name=f"{backbone}_ft_lb{nb}_wsa",
-                        checkpoint=ck,
-                        use_window_soft_argmax=True,
-                        wsa_window=WSA_WINDOW,
-                        wsa_temperature=WSA_TEMPERATURE,
-                        **bk,
-                    ))
-
-        # LoRA checkpoint.
-        lora_ck_path = _default_lora_ckpt(cwd, backbone)
-        lora_ck = _resolve_ckpt_path(cwd, lora_ck_path)
-
-        if RUN_EVAL_LORA_CHECKPOINT[idx]:
-            if not lora_ck:
-                logger.log_line(
-                    f"WARNING: LoRA checkpoint not found: {lora_ck_path}",
-                    err=True,
-                )
-            else:
-                specs.append(EvalRunSpec(name=f"{backbone}_lora", checkpoint=lora_ck, **bk))
-
-        if RUN_EVAL_LORA_WSA[idx]:
-            if lora_ck:
+                    specs.append(EvalRunSpec(name=f"{backbone}_ft_lb{nb}", checkpoint=ck, **bk))
+            if RUN_EVAL_FINETUNED_WSA[idx] and ck:
                 specs.append(EvalRunSpec(
-                    name=f"{backbone}_lora_wsa",
-                    checkpoint=lora_ck,
+                    name=f"{backbone}_ft_lb{nb}_wsa",
+                    checkpoint=ck,
                     use_window_soft_argmax=True,
                     wsa_window=WSA_WINDOW,
                     wsa_temperature=WSA_TEMPERATURE,
                     **bk,
                 ))
 
+        lora_ck_path = _default_lora_ckpt(cwd, backbone)
+        lora_ck = _resolve_ckpt_path(cwd, lora_ck_path)
+        if RUN_EVAL_LORA_CHECKPOINT[idx]:
+            if not lora_ck:
+                logger.log_line(f"WARNING: LoRA checkpoint not found: {lora_ck_path}", err=True)
+            else:
+                specs.append(EvalRunSpec(name=f"{backbone}_lora", checkpoint=lora_ck, **bk))
+        if RUN_EVAL_LORA_WSA[idx] and lora_ck:
+            specs.append(EvalRunSpec(
+                name=f"{backbone}_lora_wsa",
+                checkpoint=lora_ck,
+                use_window_soft_argmax=True,
+                wsa_window=WSA_WINDOW,
+                wsa_temperature=WSA_TEMPERATURE,
+                **bk,
+            ))
+
     return specs
 
 
-def _export_tables(
-    cwd: Path,
-    results: Sequence[Dict[str, Any]],
-    logger: PipelineLogger,
-) -> None:
+def _export_tables(cwd: Path, results: Sequence[Dict[str, Any]], logger: PipelineLogger) -> None:
     from evaluation.experiment_runner import metrics_rows_for_table
 
     out_dir = cwd / "runs" / "pipeline_exports"
@@ -666,51 +522,26 @@ def _export_tables(
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
     if rows:
-        fieldnames = list(rows[0].keys())
         with open(csv_path, "w", encoding="utf-8", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
             w.writeheader()
             w.writerows(rows)
 
-    # SD4Match backend: also write per-image and per-point JSON sidecars when present.
-    per_image = []
-    per_point = []
-    by_difficulty_flag = []
-    for r in results:
-        if "sd4match_per_image" in r:
-            per_image.append({"name": r.get("name"), "split": r.get("spec", {}).get("split"), "data": r["sd4match_per_image"]})
-        if "sd4match_per_point" in r:
-            per_point.append({"name": r.get("name"), "split": r.get("spec", {}).get("split"), "data": r["sd4match_per_point"]})
-        if "sd4match_by_difficulty_flag" in r:
-            by_difficulty_flag.append(
-                {
-                    "name": r.get("name"),
-                    "split": r.get("spec", {}).get("split"),
-                    "data": r["sd4match_by_difficulty_flag"],
-                }
-            )
-    per_image_path = out_dir / "pck_results_per_image.json"
-    per_point_path = out_dir / "pck_results_per_point.json"
-    by_difficulty_flag_path = out_dir / "pck_results_by_difficulty_flag.json"
-    if per_image:
-        with open(per_image_path, "w", encoding="utf-8") as f:
-            json.dump(per_image, f, indent=2)
-    if per_point:
-        with open(per_point_path, "w", encoding="utf-8") as f:
-            json.dump(per_point, f, indent=2)
-    if by_difficulty_flag:
-        with open(by_difficulty_flag_path, "w", encoding="utf-8") as f:
-            json.dump(by_difficulty_flag, f, indent=2)
-
-    # Per-category breakdown: macro (per-image) and micro (per-point) for tables.
+    by_difficulty_flag: List[Dict[str, Any]] = []
     per_category: List[Dict[str, Any]] = []
     for r in results:
+        if "sd4match_by_difficulty_flag" in r:
+            by_difficulty_flag.append({
+                "name": r.get("name"),
+                "split": r.get("spec", {}).get("split"),
+                "data": r["sd4match_by_difficulty_flag"],
+            })
+
         pi = r.get("sd4match_per_image")
         pp = r.get("sd4match_per_point")
         if not pi:
             continue
         entry: Dict[str, Any] = {"name": r.get("name"), "categories": {}}
-        # Macro: per-image mean per category -> pck@alpha
         for metric_key, cat_dict in pi.items():
             if not metric_key.startswith("custom_pck"):
                 continue
@@ -721,7 +552,6 @@ def _export_tables(
                 entry["categories"].setdefault(cat, {})
                 if isinstance(vals, list) and vals:
                     entry["categories"][cat][f"pck@{alpha_str}"] = float(sum(vals) / len(vals))
-        # Micro: per-point mean per category -> pck_pt@alpha
         if pp:
             for metric_key, cat_dict in pp.items():
                 if not metric_key.startswith("custom_pck"):
@@ -734,59 +564,48 @@ def _export_tables(
                     if isinstance(vals, list) and vals:
                         entry["categories"][cat][f"pck_pt@{alpha_str}"] = float(sum(vals) / len(vals))
         per_category.append(entry)
-    per_category_path = out_dir / "pck_results_per_category.json"
-    per_category_csv_path = out_dir / "pck_results_per_category.csv"
+
+    wrote = [str(json_path), str(csv_path)]
+    if by_difficulty_flag:
+        by_path = out_dir / "pck_results_by_difficulty_flag.json"
+        with open(by_path, "w", encoding="utf-8") as f:
+            json.dump(by_difficulty_flag, f, indent=2)
+        wrote.append(str(by_path))
     if per_category:
-        with open(per_category_path, "w", encoding="utf-8") as f:
+        per_path = out_dir / "pck_results_per_category.json"
+        with open(per_path, "w", encoding="utf-8") as f:
             json.dump(per_category, f, indent=2)
-        # CSV pivot: rows (run, metric), columns categories (e.g. LaTeX).
+        wrote.append(str(per_path))
         all_cats = sorted({cat for entry in per_category for cat in entry["categories"]})
-        with open(per_category_csv_path, "w", encoding="utf-8", newline="") as f:
+        per_csv = out_dir / "pck_results_per_category.csv"
+        with open(per_csv, "w", encoding="utf-8", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["name", "metric"] + all_cats)
             w.writeheader()
             for entry in per_category:
-                for metric_key in ["pck@0.05", "pck@0.1", "pck@0.2", "pck_pt@0.05", "pck_pt@0.1", "pck_pt@0.2"]:
-                    row: Dict[str, Any] = {"name": entry["name"], "metric": metric_key}
+                for mk in ["pck@0.05", "pck@0.1", "pck@0.2", "pck_pt@0.05", "pck_pt@0.1", "pck_pt@0.2"]:
+                    row: Dict[str, Any] = {"name": entry["name"], "metric": mk}
                     for cat in all_cats:
-                        row[cat] = entry["categories"].get(cat, {}).get(metric_key, "")
+                        row[cat] = entry["categories"].get(cat, {}).get(mk, "")
                     w.writerow(row)
+        wrote.append(str(per_csv))
 
-    wrote = [str(json_path), str(csv_path)]
-    if per_image:
-        wrote.append(str(per_image_path))
-    if per_point:
-        wrote.append(str(per_point_path))
-    if by_difficulty_flag:
-        wrote.append(str(by_difficulty_flag_path))
-    if per_category:
-        wrote.append(str(per_category_path))
-        wrote.append(str(per_category_csv_path))
     logger.log_line("Wrote " + " | ".join(wrote) + ".")
 
 
 def _run_eval_and_export(
-    cwd: Path,
-    sam_checkpoint: Optional[str],
-    logger: PipelineLogger,
-    *,
-    num_workers: int,
-    device_str: str,
+    cwd: Path, sam_checkpoint: Optional[str], logger: PipelineLogger,
+    *, num_workers: int, device_str: str,
 ) -> int:
     import torch
-
     from evaluation.experiment_runner import run_comparison_batch
 
     specs = _build_eval_specs(cwd, sam_checkpoint, logger, num_workers=num_workers)
     if not specs:
-        logger.log_line("No PCK eval specs selected (all RUN_EVAL_* flags False or skipped).")
+        logger.log_line("No PCK eval specs selected.")
         return 0
 
-    device = torch.device(device_str)
     results = run_comparison_batch(
-        specs,
-        spair_root=SPAIR_ROOT,
-        alphas=EVAL_ALPHAS,
-        device=device,
+        specs, spair_root=SPAIR_ROOT, alphas=EVAL_ALPHAS, device=torch.device(device_str),
     )
     for r in results:
         logger.log_line(f"--- {r['name']} --- {r['metrics']}")
@@ -796,26 +615,23 @@ def _run_eval_and_export(
 
 
 def _sam_slot_used() -> bool:
-    return (
-        TRAIN_FINETUNE[2]
-        or TRAIN_LORA[2]
-        or RUN_EVAL_BASELINE[2]
-        or RUN_EVAL_BASELINE_WSA[2]
-        or RUN_EVAL_FINETUNED_CHECKPOINT[2]
-        or RUN_EVAL_LORA_CHECKPOINT[2]
-        or RUN_EVAL_FINETUNED_WSA[2]
-        or RUN_EVAL_LORA_WSA[2]
+    return any(
+        t[2] for t in (
+            TRAIN_FINETUNE, TRAIN_LORA,
+            RUN_EVAL_BASELINE, RUN_EVAL_BASELINE_WSA,
+            RUN_EVAL_FINETUNED_CHECKPOINT, RUN_EVAL_LORA_CHECKPOINT,
+            RUN_EVAL_FINETUNED_WSA, RUN_EVAL_LORA_WSA,
+        )
     )
 
 
 def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
     from utils.hardware import recommended_dataloader_workers, recommended_device_str
+    from utils import pipeline_state as _ps
 
     for name, t in (
-        ("TRAIN_FINETUNE", TRAIN_FINETUNE),
-        ("TRAIN_LORA", TRAIN_LORA),
-        ("RUN_EVAL_BASELINE", RUN_EVAL_BASELINE),
-        ("RUN_EVAL_BASELINE_WSA", RUN_EVAL_BASELINE_WSA),
+        ("TRAIN_FINETUNE", TRAIN_FINETUNE), ("TRAIN_LORA", TRAIN_LORA),
+        ("RUN_EVAL_BASELINE", RUN_EVAL_BASELINE), ("RUN_EVAL_BASELINE_WSA", RUN_EVAL_BASELINE_WSA),
         ("RUN_EVAL_FINETUNED_CHECKPOINT", RUN_EVAL_FINETUNED_CHECKPOINT),
         ("RUN_EVAL_LORA_CHECKPOINT", RUN_EVAL_LORA_CHECKPOINT),
         ("RUN_EVAL_FINETUNED_WSA", RUN_EVAL_FINETUNED_WSA),
@@ -829,25 +645,18 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
         accelerator=eff_device
     )
     logger.log_line(
-        f"Adaptive hardware: device={eff_device} precision={eff_precision} num_workers={eff_workers} "
-        f"cpu_count={os.cpu_count()} platform={sys.platform}"
+        f"Adaptive hardware: device={eff_device} precision={eff_precision} "
+        f"num_workers={eff_workers} cpu_count={os.cpu_count()} platform={sys.platform}"
     )
-
-    from utils import pipeline_state as _ps
 
     fp = _ps.fingerprint_from_config(_fingerprint_payload())
     if not PIPELINE_RESUME:
         state = {"fingerprint": fp, "completed": []}
-        logger.log_line(
-            "PIPELINE_RESUME=False: stage skip and pipeline_state.json updates disabled; "
-            "each run executes all enabled stages (no automatic --resume)."
-        )
+        logger.log_line("PIPELINE_RESUME=False: every enabled stage runs.")
     elif _ps.should_reset_from_env():
         state = {"fingerprint": fp, "completed": []}
         _ps.save_state(cwd, state)
-        logger.log_line(
-            "pipeline_state: cleared (environment SEMANTIC_CORRESPONDENCE_PIPELINE_RESET is set)."
-        )
+        logger.log_line("pipeline_state: cleared (SEMANTIC_CORRESPONDENCE_PIPELINE_RESET set).")
         _trace_stage(cwd, logger, "reset", "pipeline_state", fingerprint_prefix=fp[:16])
     else:
         raw = _ps.load_state(cwd)
@@ -859,24 +668,19 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             state["completed"] = list(state.get("completed", []))
             state["fingerprint"] = fp
             _ps.save_state(cwd, state)
-            logger.log_line(
-                "pipeline_state: config fingerprint changed; completed steps preserved. "
-                "Delete AML_results/ on Drive to restart from scratch."
-            )
+            logger.log_line("pipeline_state: config fingerprint changed; completed steps preserved.")
         else:
             state = dict(raw)
             state["completed"] = list(state.get("completed", []))
             state["fingerprint"] = fp
             logger.log_line(f"pipeline_state: completed steps = {state['completed']!r}")
     if PIPELINE_RESUME:
-        logger.log_line(
-            f"Tracing: structured log {_ps.stage_events_path(cwd)} | state file {_ps.state_path(cwd)}"
-        )
+        logger.log_line(f"Tracing: {_ps.stage_events_path(cwd)} | state {_ps.state_path(cwd)}")
 
     effective_sam = SAM_CHECKPOINT or os.environ.get("SAM_CHECKPOINT")
     if _sam_slot_used() and not effective_sam:
         logger.log_line(
-            "ERROR: SAM is enabled in the pipeline but SAM_CHECKPOINT is not set.\n"
+            "ERROR: SAM is enabled but SAM_CHECKPOINT is not set.\n"
             "  Set SAM_CHECKPOINT in run_pipeline.py or export SAM_CHECKPOINT=/path/to/sam_vit_b_01ec64.pth",
             err=True,
         )
@@ -885,14 +689,13 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
     if RUN_VERIFY_DATASET:
         v_sid = "verify_dataset"
         if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), v_sid):
-            logger.log_line(f"[SKIP] stage_id={v_sid} reason=already_completed")
+            logger.log_line(f"[SKIP] stage_id={v_sid}")
             _trace_stage(cwd, logger, "skip", v_sid, reason="already_completed")
         else:
             _trace_stage(cwd, logger, "start", v_sid)
             rc = _run_script(
-                cwd,
-                "scripts/verify_dataset.py",
-                ([] if SPAIR_ROOT is None else ["--spair-root", SPAIR_ROOT]),
+                cwd, "scripts/verify_dataset.py",
+                [] if SPAIR_ROOT is None else ["--spair-root", SPAIR_ROOT],
                 logger,
             )
             if rc != 0:
@@ -902,7 +705,6 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                 _ps.mark_step_done(cwd, state, v_sid)
             _trace_stage(cwd, logger, "done", v_sid, exit_code=0)
 
-    # Shared training flags (device, workers, data paths, weights).
     base_train: List[str] = []
     if SPAIR_ROOT:
         base_train.extend(["--spair-root", SPAIR_ROOT])
@@ -913,6 +715,7 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
         "--device", eff_device,
         "--precision", eff_precision,
         "--resume-save-interval", str(RESUME_SAVE_INTERVAL),
+        "--log-batch-interval", str(LOG_BATCH_INTERVAL),
     ])
     if DINOV2_WEIGHTS:
         base_train.extend(["--dinov2-weights", DINOV2_WEIGHTS])
@@ -920,9 +723,7 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
         base_train.extend(["--dinov3-weights", DINOV3_WEIGHTS])
     if effective_sam:
         base_train.extend(["--sam-checkpoint", effective_sam])
-    base_train.extend(["--log-batch-interval", str(LOG_BATCH_INTERVAL)])
 
-    # Fine-tuning: one run per entry in LAST_BLOCKS_LIST.
     for i, backbone in enumerate(BACKBONE_NAMES):
         if not TRAIN_FINETUNE[i]:
             continue
@@ -930,18 +731,19 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             logger.log_line("ERROR: TRAIN_FINETUNE for SAM requires SAM_CHECKPOINT.", err=True)
             return 2
         for nb in LAST_BLOCKS_LIST:
-            ft_batch_size = _resolve_batch_size("finetune", backbone)
+            ft_bs = _resolve_batch_size("finetune", backbone)
             ft_sid = f"finetune:{backbone}:lb{nb}"
             if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), ft_sid):
-                logger.log_line(f"[SKIP] stage_id={ft_sid} reason=already_completed")
+                logger.log_line(f"[SKIP] stage_id={ft_sid}")
                 _trace_stage(cwd, logger, "skip", ft_sid, reason="already_completed")
                 continue
             ft_h, ft_w = _resolve_image_hw(backbone)
             args = [
+                "--mode", "finetune",
                 *base_train,
                 "--height", str(ft_h),
                 "--width", str(ft_w),
-                "--batch-size", str(ft_batch_size),
+                "--batch-size", str(ft_bs),
                 "--lr", str(FT_LR),
                 "--weight-decay", str(FT_WEIGHT_DECAY),
                 "--backbone", backbone,
@@ -950,16 +752,14 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                 "--last-blocks", str(nb),
                 "--layer-indices", str(DINO_LAYER_INDICES),
             ]
-            logger.log_line(
-                f"stage_id={ft_sid} resolved batch_size={ft_batch_size} precision={eff_precision}"
-            )
+            logger.log_line(f"stage_id={ft_sid} batch_size={ft_bs} precision={eff_precision}")
             resume_file = (cwd / CHECKPOINT_DIR / f"{backbone}_lastblocks{nb}_resume.pt").resolve()
             if PIPELINE_RESUME and resume_file.is_file():
                 args.extend(["--resume", str(resume_file)])
                 logger.log_line(f"[RESUME] stage_id={ft_sid} checkpoint={resume_file}")
                 _trace_stage(cwd, logger, "resume_prepare", ft_sid, path=str(resume_file))
             _trace_stage(cwd, logger, "start", ft_sid)
-            rc = _run_script(cwd, "scripts/train_finetune.py", args, logger)
+            rc = _run_script(cwd, "scripts/train.py", args, logger)
             if rc != 0:
                 _trace_stage(cwd, logger, "fail", ft_sid, exit_code=rc)
                 return rc
@@ -967,25 +767,25 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                 _ps.mark_step_done(cwd, state, ft_sid)
             _trace_stage(cwd, logger, "done", ft_sid, exit_code=0)
 
-    # --- LoRA training ---
     for i, backbone in enumerate(BACKBONE_NAMES):
         if not TRAIN_LORA[i]:
             continue
-        lora_batch_size = _resolve_batch_size("lora", backbone)
         if backbone == "sam_vit_b" and not effective_sam:
             logger.log_line("ERROR: TRAIN_LORA for SAM requires SAM_CHECKPOINT.", err=True)
             return 2
+        lora_bs = _resolve_batch_size("lora", backbone)
         lora_sid = f"lora:{backbone}"
         if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), lora_sid):
-            logger.log_line(f"[SKIP] stage_id={lora_sid} reason=already_completed")
+            logger.log_line(f"[SKIP] stage_id={lora_sid}")
             _trace_stage(cwd, logger, "skip", lora_sid, reason="already_completed")
             continue
         lora_h, lora_w = _resolve_image_hw(backbone)
         args = [
+            "--mode", "lora",
             *base_train,
             "--height", str(lora_h),
             "--width", str(lora_w),
-            "--batch-size", str(lora_batch_size),
+            "--batch-size", str(lora_bs),
             "--lr", str(LORA_LR),
             "--alpha", str(LORA_ALPHA),
             "--backbone", backbone,
@@ -995,16 +795,14 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             "--rank", str(LORA_RANK),
             "--layer-indices", str(DINO_LAYER_INDICES),
         ]
-        logger.log_line(
-            f"stage_id={lora_sid} resolved batch_size={lora_batch_size} precision={eff_precision}"
-        )
+        logger.log_line(f"stage_id={lora_sid} batch_size={lora_bs} precision={eff_precision}")
         resume_lora = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_resume.pt").resolve()
         if PIPELINE_RESUME and resume_lora.is_file():
             args.extend(["--resume", str(resume_lora)])
             logger.log_line(f"[RESUME] stage_id={lora_sid} checkpoint={resume_lora}")
             _trace_stage(cwd, logger, "resume_prepare", lora_sid, path=str(resume_lora))
         _trace_stage(cwd, logger, "start", lora_sid)
-        rc = _run_script(cwd, "scripts/train_lora.py", args, logger)
+        rc = _run_script(cwd, "scripts/train.py", args, logger)
         if rc != 0:
             _trace_stage(cwd, logger, "fail", lora_sid, exit_code=rc)
             return rc
@@ -1012,30 +810,20 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             _ps.mark_step_done(cwd, state, lora_sid)
         _trace_stage(cwd, logger, "done", lora_sid, exit_code=0)
 
-    any_eval = any(
-        any(t)
-        for t in (
-            RUN_EVAL_BASELINE,
-            RUN_EVAL_BASELINE_WSA,
-            RUN_EVAL_FINETUNED_CHECKPOINT,
-            RUN_EVAL_LORA_CHECKPOINT,
-            RUN_EVAL_FINETUNED_WSA,
-            RUN_EVAL_LORA_WSA,
-        )
-    )
+    any_eval = any(any(t) for t in (
+        RUN_EVAL_BASELINE, RUN_EVAL_BASELINE_WSA,
+        RUN_EVAL_FINETUNED_CHECKPOINT, RUN_EVAL_LORA_CHECKPOINT,
+        RUN_EVAL_FINETUNED_WSA, RUN_EVAL_LORA_WSA,
+    ))
     if any_eval:
         ev_sid = "eval_and_export"
         if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), ev_sid):
-            logger.log_line(f"[SKIP] stage_id={ev_sid} reason=already_completed")
+            logger.log_line(f"[SKIP] stage_id={ev_sid}")
             _trace_stage(cwd, logger, "skip", ev_sid, reason="already_completed")
         else:
             _trace_stage(cwd, logger, "start", ev_sid)
             rc = _run_eval_and_export(
-                cwd,
-                effective_sam,
-                logger,
-                num_workers=eff_workers,
-                device_str=eff_device,
+                cwd, effective_sam, logger, num_workers=eff_workers, device_str=eff_device,
             )
             if rc != 0:
                 _trace_stage(cwd, logger, "fail", ev_sid, exit_code=rc)
@@ -1047,11 +835,11 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
     if RUN_PYTEST:
         py_sid = "pytest"
         if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), py_sid):
-            logger.log_line(f"[SKIP] stage_id={py_sid} reason=already_completed")
+            logger.log_line(f"[SKIP] stage_id={py_sid}")
             _trace_stage(cwd, logger, "skip", py_sid, reason="already_completed")
         else:
             _trace_stage(cwd, logger, "start", py_sid)
-            rc = _run_cmd(cwd, [_python(cwd), "-m", "pytest", "-q", "tests"], logger)
+            rc = _run_cmd(cwd, [sys.executable, "-m", "pytest", "-q", "tests"], logger)
             if rc != 0:
                 _trace_stage(cwd, logger, "fail", py_sid, exit_code=rc)
                 return rc
@@ -1059,23 +847,16 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                 _ps.mark_step_done(cwd, state, py_sid)
             _trace_stage(cwd, logger, "done", py_sid, exit_code=0)
 
-    logger.log_line("Pipeline finished (all configured stages for this run).")
+    logger.log_line("Pipeline finished.")
     return 0
 
 
 def main() -> int:
-    import argparse
-
     parser = argparse.ArgumentParser(description="Run semantic-correspondence pipeline.")
-    parser.add_argument(
-        "--config",
-        metavar="PATH",
-        default=None,
-        help="Optional YAML file (Colab / notebook style) overriding in-script defaults.",
-    )
+    parser.add_argument("--config", metavar="PATH", default=None, help="Optional YAML file.")
     args = parser.parse_args()
 
-    cwd = _repo_root()
+    cwd = _REPO
     os.chdir(cwd)
     if args.config:
         cfg_path = Path(args.config).expanduser()

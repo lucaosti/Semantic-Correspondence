@@ -1,8 +1,4 @@
-"""
-Shared helpers for training scripts (``train_finetune.py``, ``train_lora.py``).
-
-Centralizes duplicated logic so that changes propagate consistently.
-"""
+"""Shared helpers for ``scripts/train.py`` (both ``--mode finetune`` and ``--mode lora``)."""
 
 from __future__ import annotations
 
