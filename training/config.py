@@ -89,11 +89,16 @@ class LoRAConfig:
 
 @dataclass(frozen=True)
 class EarlyStoppingConfig:
-    """Early stopping on validation PCK or loss."""
+    """Early stopping on validation loss (defaults match the CLI / pipeline).
 
-    patience: int = 5
+    `min_delta` is the tolerance on the monitored metric: an epoch only counts
+    as an improvement if it beats the current best by more than `min_delta`.
+    Default ``0.0`` = strict (any improvement resets the counter).
+    """
+
+    patience: int = 7
     min_delta: float = 0.0
-    mode: str = "max"  # "max" for PCK, "min" for loss
+    mode: str = "min"  # "max" for PCK, "min" for loss
 
 
 @dataclass(frozen=True)

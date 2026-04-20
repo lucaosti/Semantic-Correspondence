@@ -174,9 +174,11 @@ Injected on late MLP linears (`models/common/lora.py` + backbone-specific hooks)
 
 ### 6.7 Early stopping and resume
 
-- **Early stopping:** `training/early_stopping.py` on **validation loss** each epoch (`patience` configurable).
+- **Early stopping:** `training/early_stopping.py` on **validation loss** each epoch. Configurable via `--patience` (default **7**) and `--min-delta` (default **0.0** = strict). An epoch counts as improvement only if `val_loss < best − min_delta`; otherwise the bad-epoch counter increments and training stops once it reaches `patience`. Active in both `--mode finetune` and `--mode lora`.
+- **Resume preserves stopper state:** `best_value`, `num_bad_epochs`, `best_epoch`, `patience`, `min_delta`, `mode` are serialized into `*_resume.pt` and restored on `--resume` (`scripts/_training_common.py`). So resuming never resets the patience counter — if training was interrupted after 4 bad epochs, it continues from 4 and stops after 3 more stagnant ones (assuming `patience=7`). No wasted epochs.
 - **Resume files:** `checkpoints/<backbone>_lastblocks*_resume.pt` / LoRA equivalents store model, optimizer, epoch, stopper state, and optional `batch_in_epoch` for mid-epoch resume. Mid-epoch resume is only as granular as the save cadence: training scripts write these files every `--resume-save-interval` batches (`AML_Colab.ipynb` uses **25** for Colab disconnects; `AML_Local.ipynb` uses **50**; the pipeline default is **50**).
 - **Two-level resume:** (1) pipeline stage skip via `runs/pipeline_state.json` (`PIPELINE_RESUME=True`), and (2) training resume via `checkpoints/*_resume.pt` (`--resume ...` + periodic saves). If you see training restart from batch 0 after an interruption, it usually means no recent `*_resume.pt` was written (save interval too large) or `checkpoints/` was not persisted.
+- **Notebook auto-detect (fresh vs resume):** Both notebooks set `START_FROM_SCRATCH` automatically based on persistence. `AML_Local.ipynb` checks if `runs/` and `checkpoints/` exist under the repo root. `AML_Colab.ipynb` checks Drive: resumes if `.../AML_results/runs/pipeline_state.json` exists **or** `.../AML_results/checkpoints/` contains any `*.pt`. Cold start = delete those on Drive (or the local folders) and re-run the notebook. No manual toggle needed in either case.
 
 ---
 
@@ -230,14 +232,15 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 | `LORA_LAST_BLOCKS` | `2` | LoRA block count |
 | `PRECISION` | `auto` | Training precision policy (`auto`/`fp32`/`bf16`/`fp16`); MPS/CPU always resolve to fp32 |
 | `FT_EPOCHS` / `LORA_EPOCHS` | 50 | Epochs per training stage (early stopping typically triggers earlier) |
-| `FT_PATIENCE` / `LORA_PATIENCE` | 7 | Early stopping patience |
+| `FT_PATIENCE` / `LORA_PATIENCE` | 7 | Early stopping patience (epochs of stagnant val loss before stop) |
+| `FT_MIN_DELTA` / `LORA_MIN_DELTA` | `0.0` | Early-stopping tolerance on val loss. Set > 0 to ignore tiny improvements (e.g. `1e-3`) |
 | `LORA_RANK` | 8 | LoRA rank |
 | `PREPROCESS` | `FIXED_RESIZE` | Image preprocessing mode |
 | `IMAGE_SIZE_BY_BACKBONE` | `{dinov2_vitb14: (518,518), dinov3_vitb16: (512,512), sam_vit_b: (512,512)}` | Per-backbone input size (exact patch-size multiples: 518=37×14, 512=32×16; SAM features always extracted at 1024×1024 internally) |
 | `IMAGE_HEIGHT` / `IMAGE_WIDTH` | 784 / 784 | Global fallback size for backbones not listed in `IMAGE_SIZE_BY_BACKBONE` |
 | `EVAL_SPLIT` | `test` | Evaluation split |
 | `EVAL_LIMIT` | 0 (full split) | Pair limit for debugging |
-| `LOG_BATCH_INTERVAL` | 50 | Batch logging frequency |
+| `LOG_BATCH_INTERVAL` | 50 | Batch logging frequency (pipeline default; `scripts/train.py --log-batch-interval` standalone default is **100**) |
 | `RESUME_SAVE_INTERVAL` | 50 | Mid-epoch resume checkpoint cadence |
 | `DINO_LAYER_INDICES` | `4` | Intermediate ViT layer for DINO feature extraction (passed as `--layer-indices`; ignored for SAM) |
 

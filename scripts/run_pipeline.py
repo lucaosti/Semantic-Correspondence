@@ -60,11 +60,13 @@ SAM_CHECKPOINT: Optional[str] = str(_SAM_VIT_B_DEFAULT) if _SAM_VIT_B_DEFAULT.is
 FT_BATCH_SIZE: int = 20
 FT_EPOCHS: int = 50
 FT_PATIENCE: int = 7
+FT_MIN_DELTA: float = 0.0
 FT_LR: float = 5e-5
 FT_WEIGHT_DECAY: float = 0.01
 LORA_BATCH_SIZE: int = 20
 LORA_EPOCHS: int = 50
 LORA_PATIENCE: int = 7
+LORA_MIN_DELTA: float = 0.0
 LORA_LR: float = 1e-3
 LORA_ALPHA: float = 16.0
 PRECISION: str = "auto"
@@ -207,6 +209,8 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["FT_EPOCHS"] = int(finetune["epochs"])
         if finetune.get("patience") is not None:
             g["FT_PATIENCE"] = int(finetune["patience"])
+        if finetune.get("min_delta") is not None:
+            g["FT_MIN_DELTA"] = float(finetune["min_delta"])
         if finetune.get("lr") is not None:
             g["FT_LR"] = float(finetune["lr"])
         if finetune.get("weight_decay") is not None:
@@ -230,6 +234,8 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["LORA_EPOCHS"] = int(lora["epochs"])
         if lora.get("patience") is not None:
             g["LORA_PATIENCE"] = int(lora["patience"])
+        if lora.get("min_delta") is not None:
+            g["LORA_MIN_DELTA"] = float(lora["min_delta"])
         if lora.get("rank") is not None:
             g["LORA_RANK"] = int(lora["rank"])
         if lora.get("alpha") is not None:
@@ -281,6 +287,7 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "FT_BATCH_SIZE": FT_BATCH_SIZE,
         "FT_EPOCHS": FT_EPOCHS,
         "FT_PATIENCE": FT_PATIENCE,
+        "FT_MIN_DELTA": FT_MIN_DELTA,
         "FT_LR": FT_LR,
         "FT_WEIGHT_DECAY": FT_WEIGHT_DECAY,
         "LORA_BATCH_SIZE": LORA_BATCH_SIZE,
@@ -288,6 +295,7 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "LORA_BATCH_SIZE_BY_BACKBONE": dict(sorted(LORA_BATCH_SIZE_BY_BACKBONE.items())),
         "LORA_EPOCHS": LORA_EPOCHS,
         "LORA_PATIENCE": LORA_PATIENCE,
+        "LORA_MIN_DELTA": LORA_MIN_DELTA,
         "LORA_LR": LORA_LR,
         "LORA_ALPHA": LORA_ALPHA,
         "PRECISION": PRECISION,
@@ -749,6 +757,7 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                 "--backbone", backbone,
                 "--epochs", str(FT_EPOCHS),
                 "--patience", str(FT_PATIENCE),
+                "--min-delta", str(FT_MIN_DELTA),
                 "--last-blocks", str(nb),
                 "--layer-indices", str(DINO_LAYER_INDICES),
             ]
@@ -791,6 +800,7 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             "--backbone", backbone,
             "--epochs", str(LORA_EPOCHS),
             "--patience", str(LORA_PATIENCE),
+            "--min-delta", str(LORA_MIN_DELTA),
             "--last-blocks", str(LORA_LAST_BLOCKS),
             "--rank", str(LORA_RANK),
             "--layer-indices", str(DINO_LAYER_INDICES),

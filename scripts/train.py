@@ -76,6 +76,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--height", type=int, default=784)
     p.add_argument("--width", type=int, default=784)
     p.add_argument("--patience", type=int, default=7)
+    p.add_argument("--min-delta", type=float, default=0.0,
+                   help="Early-stopping tolerance on validation loss. An epoch counts "
+                        "as improvement only if val_loss < best - min_delta. "
+                        "0.0 (default) = strict: any improvement resets the counter.")
     p.add_argument("--layer-indices", type=int, default=4)
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     p.add_argument("--device", type=str, default=None)
@@ -194,7 +198,7 @@ def main() -> int:
         **dl_kw,
     )
 
-    stopper = EarlyStopping(patience=args.patience, mode="min")
+    stopper = EarlyStopping(patience=args.patience, min_delta=args.min_delta, mode="min")
     resume_path = os.path.join(args.checkpoint_dir, f"{tag}_resume.pt")
     layer_indices = args.layer_indices
     use_sam = args.backbone == "sam_vit_b"
