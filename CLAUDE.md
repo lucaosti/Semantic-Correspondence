@@ -74,7 +74,7 @@ pytest tests/test_matching.py    # Single test file
 
 ### Hardware
 
-Auto-detects CUDA → MPS → CPU. MPS requires `grid_sample` padding mode `"zeros"` (not `"border"`). Worker count auto-tuned from CPU count (`utils/`).
+Auto-detects CUDA → MPS → CPU. MPS requires `grid_sample` padding mode `"zeros"` (not `"border"`) and is forced to fp32. Some MPS backward kernels (e.g. `grid_sampler_2d_backward`) are missing in current PyTorch, so the Local notebook pipeline cell sets `PYTORCH_ENABLE_MPS_FALLBACK=1` when `DEVICE == "mps"` to route those ops to CPU. Worker count auto-tuned from CPU count (`utils/`). On MPS (Apple Silicon) the Local notebook uses batches tuned for 32 GB unified memory (DINO FT=8, LoRA=12, SAM=3); halve them on 16 GB Macs.
 
 ## Key Files
 

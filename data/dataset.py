@@ -693,32 +693,52 @@ def build_photometric_pair_transform(
         ``(src_aug, tgt_aug)``.
     """
 
-    def _sample_uniform(r: Tuple[float, float], rng: random.Random) -> float:
+    return _PhotometricPairTransform(brightness, contrast, saturation, hue, p, seed)
+
+
+class _PhotometricPairTransform:
+    # Top-level (picklable) so `DataLoader(num_workers>0)` works with spawn start-method
+    # (macOS default, Windows mandatory).
+    def __init__(
+        self,
+        brightness: Tuple[float, float],
+        contrast: Tuple[float, float],
+        saturation: Tuple[float, float],
+        hue: Tuple[float, float],
+        p: float,
+        seed: Optional[int],
+    ) -> None:
+        self.brightness = brightness
+        self.contrast = contrast
+        self.saturation = saturation
+        self.hue = hue
+        self.p = p
+        self.seed = seed
+
+    @staticmethod
+    def _u(r: Tuple[float, float], rng: random.Random) -> float:
         return rng.uniform(float(r[0]), float(r[1]))
 
-    def _apply_pair(src: Image.Image, tgt: Image.Image) -> Tuple[Image.Image, Image.Image]:
-        rng = random.Random(seed) if seed is not None else random.Random()
-        if rng.random() > float(p):
+    def _one(self, im: Image.Image, b: float, c: float, s: float, h: float) -> Image.Image:
+        ten = TF.pil_to_tensor(im).float() / 255.0
+        ten = TF.adjust_brightness(ten, b)
+        ten = TF.adjust_contrast(ten, c)
+        ten = TF.adjust_saturation(ten, s)
+        ten = TF.adjust_hue(ten, h)
+        ten = torch.clamp(ten, 0.0, 1.0)
+        return TF.to_pil_image(ten)
+
+    def __call__(
+        self, src: Image.Image, tgt: Image.Image
+    ) -> Tuple[Image.Image, Image.Image]:
+        rng = random.Random(self.seed) if self.seed is not None else random.Random()
+        if rng.random() > float(self.p):
             return src, tgt
-
-        # Sample parameters once, apply to both images.
-        b = _sample_uniform(brightness, rng)
-        c = _sample_uniform(contrast, rng)
-        s = _sample_uniform(saturation, rng)
-        h = _sample_uniform(hue, rng)
-
-        def _one(im: Image.Image) -> Image.Image:
-            ten = TF.pil_to_tensor(im).float() / 255.0
-            ten = TF.adjust_brightness(ten, b)
-            ten = TF.adjust_contrast(ten, c)
-            ten = TF.adjust_saturation(ten, s)
-            ten = TF.adjust_hue(ten, h)
-            ten = torch.clamp(ten, 0.0, 1.0)
-            return TF.to_pil_image(ten)
-
-        return _one(src), _one(tgt)
-
-    return _apply_pair
+        b = self._u(self.brightness, rng)
+        c = self._u(self.contrast, rng)
+        s = self._u(self.saturation, rng)
+        h = self._u(self.hue, rng)
+        return self._one(src, b, c, s, h), self._one(tgt, b, c, s, h)
 
 
 # ---------------------------------------------------------------------------

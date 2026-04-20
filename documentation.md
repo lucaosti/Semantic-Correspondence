@@ -138,6 +138,8 @@ Fine-tuning and LoRA have **separate** batch size controls to avoid silent overw
 | `training/config.py` dataclasses | **20** | **20** |
 | Per-backbone override (pipeline) | `sam_vit_b` → **4** | `sam_vit_b` → **4** |
 | Colab config (`AML_Colab.ipynb`, H100-oriented) | map: DINOv2=32, DINOv3=32, SAM=8 | map: DINOv2=48, DINOv3=48, SAM=8 |
+| Local on MPS / M2 Max 32 GB (`AML_Local.ipynb`) | map: DINOv2=8, DINOv3=8, SAM=3 | map: DINOv2=12, DINOv3=12, SAM=3 |
+| Local on MPS / 16 GB Apple Silicon | map: DINOv2=4, DINOv3=4, SAM=2 | map: DINOv2=4, DINOv3=4, SAM=2 |
 
 `run_pipeline.py` also supports optional per-backbone overrides through
 `FT_BATCH_SIZE_BY_BACKBONE` and `LORA_BATCH_SIZE_BY_BACKBONE` (YAML:
