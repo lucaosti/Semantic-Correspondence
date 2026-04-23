@@ -64,6 +64,8 @@ pytest tests/test_matching.py    # Single test file
 
 `scripts/run_pipeline.py` chains all stages for all backbones × block counts. It tracks completed stages in `runs/pipeline_state.json` (skip on resume), detects config changes via fingerprinting, and logs to `runs/logs/pipeline_<timestamp>.log`.
 
+**Config precedence:** module-level defaults in `run_pipeline.py` → overridden by `config.yaml` (via `--config`) → overridden by notebook-written values (`AML_Local.ipynb` / `AML_Colab.ipynb` patch `runtime` fields in the config dict before invoking the pipeline). The notebook value wins because it is applied last.
+
 ### Data
 
 `data/dataset.py` (`SPair71kPairDataset`): three splits (`train`/`val`/`test`). Preprocessing modes: `FIXED_RESIZE`, `LETTERBOX_PATCH_GRID`, `SCALE_LONGEST_ROUND`. Keypoints padded to MAX_KEYPOINTS=20; invalid slots use `INVALID_KP_COORD = −2.0`. Dataset root resolved via `SPAIR_ROOT` env var or `data/SPair-71k/` default (`data/paths.py`).

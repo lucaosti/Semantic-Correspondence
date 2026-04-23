@@ -147,6 +147,9 @@ class DenseFeatureExtractor(nn.Module):
         return feats, meta
 
     def _forward_sam(self, x_imagenet: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, Any]]:
+        # SAM internally operates at 1024×1024 while the dataset frame is typically 512×512.
+        # `coord_hw` is the feature/input frame SAM actually saw; `dataset_hw` is the original
+        # keypoint frame. Matching code uses both to remap predicted coords back to dataset space.
         x_sam = imagenet_to_sam_input(x_imagenet, target_size=1024)
         feats, meta = extract_dense_grid_sam(self.encoder, x_sam)
         meta["patch_size"] = 16

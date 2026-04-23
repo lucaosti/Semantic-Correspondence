@@ -38,7 +38,7 @@ Weights are **not** committed to git. Use `scripts/download_pretrained_weights.p
 |------|----------------|
 | `data/` | `SPair71kPairDataset`, `spair_collate_fn`, preprocessing, `data/paths.resolve_spair_root` |
 | `models/common/` | Matching, coords, LoRA, window soft-argmax, `vit_intermediate`, input norm |
-| `models/dinov2/`, `dinov3/`, `sam/` | Backbone implementations; weight loading in `hub_loader.py` / `backbone.py` |
+| `models/dinov2/`, `dinov3/`, `sam/` | Backbone implementations; weight loading in `hub_loader.py` / `backbone.py`. `models/dinov2/layers/` and `models/sam/modeling/` are vendored upstream code (Meta); upstream comments/FIXMEs are not first-party concerns. |
 | `training/` | `losses.py`, `engine.py` (batched Gaussian losses), `unfreeze.py`, `early_stopping.py`, `config.py` |
 | `evaluation/` | `baseline_eval.py`, `experiment_runner.py`, `visualize.py` (keypoint visualization), checkpoint helpers |
 | `utils/` | `hardware.py`, `pipeline_state.py`, `paths.py` |
@@ -90,8 +90,10 @@ Normative text: `docs/info.md`. Implementation notes: `data/dataset.py`.
 
 ### 5.1 Features
 
+All three backbones are wrapped by **`DenseFeatureExtractor`** (`models/common/dense_extractor.py`), which returns an L2-normalized **`(B, C, Hf, Wf)`** tensor regardless of backbone.
+
 - **DINO:** `extract_intermediate_dense_grid` fuses intermediate layer outputs into one **`(B, C, Hf, Wf)`** map (`models/common/vit_intermediate.py`).
-- **SAM:** `imagenet_to_sam_input` resizes to **1024×1024**, then `extract_dense_grid_sam` (`models/sam/backbone.py`).
+- **SAM:** `imagenet_to_sam_input` resizes to **1024×1024**, then `extract_dense_grid_sam` (`models/sam/backbone.py`). The dataset image frame (typically 512×512) is tracked separately from the SAM internal frame; keypoint coordinates are mapped back to the dataset frame inside `DenseFeatureExtractor`.
 
 ### 5.2 Matching
 
@@ -100,6 +102,8 @@ For each valid source keypoint: bilinear sample on source map, cosine similarity
 ### 5.3 Window soft-argmax
 
 **Inference/evaluation only** (`models/common/window_soft_argmax.py`). **Must not** appear in the training loss (`docs/info.md`).
+
+> Note: "Stage 3" in the course PDF refers to this post-processing refinement — not a separate training stage. WSA is evaluated by comparing paired baseline vs baseline+WSA (and finetune vs finetune+WSA, LoRA vs LoRA+WSA) eval specs in `scripts/run_pipeline.py`.
 
 ### 5.4 Weights policy
 
@@ -178,7 +182,7 @@ Injected on late MLP linears (`models/common/lora.py` + backbone-specific hooks)
 
 - **Early stopping:** `training/early_stopping.py` on **validation loss** each epoch. Configurable via `--patience` (default **7**) and `--min-delta` (default **0.0** = strict). An epoch counts as improvement only if `val_loss < best − min_delta`; otherwise the bad-epoch counter increments and training stops once it reaches `patience`. Active in both `--mode finetune` and `--mode lora`.
 - **Resume preserves stopper state:** `best_value`, `num_bad_epochs`, `best_epoch`, `patience`, `min_delta`, `mode` are serialized into `*_resume.pt` and restored on `--resume` (`scripts/_training_common.py`). So resuming never resets the patience counter — if training was interrupted after 4 bad epochs, it continues from 4 and stops after 3 more stagnant ones (assuming `patience=7`). No wasted epochs.
-- **Resume files:** `checkpoints/<backbone>_lastblocks*_resume.pt` / LoRA equivalents store model, optimizer, epoch, stopper state, and optional `batch_in_epoch` for mid-epoch resume. Mid-epoch resume is only as granular as the save cadence: training scripts write these files every `--resume-save-interval` batches (`AML_Colab.ipynb` uses **25** for Colab disconnects; `AML_Local.ipynb` uses **50**; the pipeline default is **50**).
+- **Resume files:** `checkpoints/<backbone>_lastblocks*_resume.pt` / LoRA equivalents store model, optimizer, epoch, stopper state, and optional `batch_in_epoch` for mid-epoch resume. Mid-epoch resume is only as granular as the save cadence: training scripts write these files every `--resume-save-interval` batches (`AML_Local.ipynb` and `AML_Colab.ipynb` both set **500**; the pipeline / `config.yaml` default is **50**).
 - **Two-level resume:** (1) pipeline stage skip via `runs/pipeline_state.json` (`PIPELINE_RESUME=True`), and (2) training resume via `checkpoints/*_resume.pt` (`--resume ...` + periodic saves). If you see training restart from batch 0 after an interruption, it usually means no recent `*_resume.pt` was written (save interval too large) or `checkpoints/` was not persisted.
 - **Notebook auto-detect (fresh vs resume):** Both notebooks set `START_FROM_SCRATCH` automatically based on persistence. `AML_Local.ipynb` checks if `runs/` and `checkpoints/` exist under the repo root. `AML_Colab.ipynb` checks Drive: resumes if `.../AML_results/runs/pipeline_state.json` exists **or** `.../AML_results/checkpoints/` contains any `*.pt`. Cold start = delete those on Drive (or the local folders) and re-run the notebook. No manual toggle needed in either case.
 
