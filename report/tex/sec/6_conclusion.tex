@@ -1,0 +1,15 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+This project presented a comprehensive evaluation of Visual Foundation Models (VFMs) for the challenging task of pixel-level semantic correspondence. By systematically analyzing DINOv2, DINOv3, and SAM on the SPair-71k benchmark, we established key insights into the trade-offs between zero-shot semantic abstraction and fine-tuned geometric accuracy.
+
+Our progressive experimental pipeline demonstrated that:
+\begin{itemize}
+    \item \textbf{VFMs as Dense Extractors:} Pre-trained vision backbones provide strong zero-shot baselines, though they inherently differ in their balance of semantic versus structural awareness.
+    \item \textbf{Inference Refinement is Crucial:} The integration of Windowed Soft-Argmax (WSA) effectively resolves discretization errors and mitigates local noise, consistently improving PCK metrics across all tested models.
+    \item \textbf{Parameter-Efficient Adaptation:} Low-Rank Adaptation (LoRA) applied exclusively to the final MLP blocks offers a highly efficient strategy to adapt massive vision backbones to specific geometric downstream tasks, drastically reducing computational overhead while maintaining competitive accuracy.
+\end{itemize}
+
+\TODO{Update the three bullet points above with actual quantitative claims once results are available (e.g., ``improving PCK@0.10 by $+X.X\%$ on average'', ``achieving $Y\%$ PCK@0.10 with only $Z$K trainable parameters''). Values come from Table~\ref{tab:quantitative_results} and \texttt{runs/paper\_figures/tables/efficiency.csv}.}
+
+While significant improvements were achieved through fine-tuning and inference refinement, establishing flawless semantic correspondence under extreme viewpoint variations and symmetry ambiguities remains an open problem. Future research directions may explore the integration of diffusion-based geometry-aware features or extend the evaluation to cross-domain datasets to further validate the generalization capabilities of these foundational representations.

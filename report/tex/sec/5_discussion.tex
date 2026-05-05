@@ -1,0 +1,20 @@
+\section{Discussion}
+\label{sec:discussion}
+
+The experimental results yield several key insights regarding the capabilities and limitations of Visual Foundation Models (VFMs) in dense semantic matching tasks.
+
+\paragraph{Backbone Comparison: Semantic vs. Structural Awareness.}
+Our evaluation highlights a clear distinction in how different backbones encode visual information. The DINO family (DINOv2 and DINOv3) demonstrates superior semantic abstraction, accurately linking object parts even across significant domain shifts (e.g., photos to paintings). Conversely, the Segment Anything Model (SAM) exhibits exceptionally strong structural and boundary awareness due to its mask-based pre-training. However, SAM's class-agnostic nature occasionally leads to geometrically precise but semantically incorrect matches compared to DINO.
+\TODO{Add quantitative backbone comparison: report best PCK@0.10 per backbone at baseline, citing specific values from Table~\ref{tab:quantitative_results}. Mention which backbone achieves the highest zero-shot PCK and whether the ranking holds after fine-tuning.}
+
+\paragraph{Impact of Inference Refinement.}
+The transition from a standard discrete \textit{argmax} to the Windowed Soft-Argmax (WSA) systematically improved the Percentage of Correct Keypoints (PCK) across all precision thresholds. By enabling sub-pixel coordinate prediction, WSA effectively mitigates the discretization error inherent in patch-based ViT architectures and reduces the model's sensitivity to isolated noise spikes in the similarity maps.
+\TODO{Quantify the average WSA gain ($\Delta$PCK@0.10) across all backbones and stages from \texttt{runs/paper\_figures/figures/wsa\_gain\_a0.1.pdf}. Discuss whether WSA gain is larger on the frozen baseline or on fine-tuned models.}
+
+\paragraph{Efficiency of Low-Rank Adaptation.}
+Full fine-tuning of large-scale ViT backbones is highly inefficient. The implementation of LoRA on the Multilayer Perceptron (MLP) layers of the final Transformer blocks proved to be a highly effective compromise. It significantly reduced the number of trainable parameters and memory footprint while providing sufficient capacity to adapt the frozen zero-shot features to the specific geometric nuances of the SPair-71k benchmark.
+\TODO{Report exact trainable parameter counts (from AML\_Analysis.ipynb §H, \texttt{runs/paper\_figures/tables/efficiency.csv}): how many parameters does LoRA add vs.\ full fine-tuning of the last $N$ blocks? Report the PCK@0.10 gap between LoRA and the best FT configuration.}
+
+\paragraph{Limitations and Failure Cases.}
+Despite the improvements, semantic correspondence remains challenging under extreme conditions. Qualitative analysis reveals that the models still struggle with severe truncations and symmetry ambiguity (e.g., consistently distinguishing a left eye from a right eye when the object undergoes a severe out-of-plane rotation). Addressing these geometry-aware semantic failures remains an open challenge for future work.
+\TODO{Add per-difficulty breakdown (viewpoint / scale / truncation / occlusion) from AML\_Analysis.ipynb §E (\texttt{runs/paper\_figures/tables/per\_difficulty\_a0.1.csv}). Identify which difficulty factor causes the largest PCK drop. Add per-category heatmap figure from §D if space allows.}

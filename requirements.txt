@@ -1,0 +1,20 @@
+# Install into a local virtualenv (see scripts/bootstrap_venv.sh):
+#   python3 -m venv .venv && source .venv/bin/activate && pip install -U pip && pip install -r requirements.txt && pip install -e .
+#
+# PyTorch: pick the wheel/index URL for your CUDA/CPU setup from the official selector:
+#   https://pytorch.org/get-started/locally/
+# Example (replace cuXXX with your CUDA build tag):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cuXXX
+# Older NVIDIA GPUs (Pascal, e.g. GTX 1080 Ti): after install, confirm CUDA works
+# (e.g. python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None)").
+# Capability (6, 1) is Pascal; if CUDA is False, reinstall torch with a build that still supports your GPU from pytorch.org.
+#
+# SAM modeling code lives under models/sam/ (official architecture; weights are separate).
+
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+Pillow>=10.0.0
+matplotlib>=3.7.0
+tqdm>=4.65.0
+PyYAML>=6.0.0

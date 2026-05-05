@@ -1,0 +1,12 @@
+\begin{abstract}
+Establishing pixel-level semantic correspondences across images with extreme variations in viewpoint, scale, and appearance remains a fundamental challenge in computer vision. This report systematically investigates the dense matching capabilities of modern Visual Foundation Models (VFMs)—specifically DINOv2, DINOv3, and the Segment Anything Model (SAM)—evaluated on the highly challenging SPair-71k benchmark. 
+
+Our study follows a structured, multi-stage pipeline:
+\begin{itemize}
+    \item \textbf{Training-Free Baseline:} Zero-shot dense feature matching utilizing cosine similarity and standard argmax.
+    \item \textbf{Light Fine-Tuning \& PEFT:} Task-specific adaptation of the latest ViT blocks, exploring efficient strategies like Low-Rank Adaptation (LoRA).
+    \item \textbf{Inference Refinement:} Replacement of discrete argmax with Windowed Soft-Argmax to achieve sub-pixel accuracy and robustness against local noise.
+\end{itemize}
+
+By evaluating the Percentage of Correct Keypoints (PCK) across multiple precision thresholds, we provide a comprehensive analysis of the trade-offs between zero-shot generalization, fine-tuned accuracy, and computational efficiency.
+\end{abstract}

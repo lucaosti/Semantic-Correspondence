@@ -1,0 +1,89 @@
+# Operating system junk
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+
+# Packaging / editable install outputs (rebuild with pip install -e .)
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+pip-wheel-metadata/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+
+# Jupyter
+.ipynb_checkpoints/
+
+# SPair-71k: entire tree stays local — do not push images, annotations, devkit, or README copies
+data/SPair-71k/
+SPair-71k.tar.gz
+
+# Optional duplicate at repository root
+/SPair-71k/
+datasets/
+
+# Training runs and exports (checkpoints may live here too if configured)
+runs/
+checkpoints/
+
+# Notebook-generated pipeline config (machine-specific absolute paths)
+config.yaml
+
+# Local / secrets (do not commit)
+.env
+.env.*
+!.env.example
+
+# Project-root markdown: keep only primary documentation
+/*.md
+!/README.md
+!/documentation.md
+
+# Internal docs (planning, notes, constraints — local only)
+docs/
+
