@@ -21,6 +21,9 @@ import functools
 import json
 import os
 import random
+
+import sys
+
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
@@ -415,6 +418,10 @@ class SPair71kPairDataset(Dataset):
         self._records: List[_PairRecord] = []
         for pair_id in pair_ids:
             ann_path = os.path.join(ann_split_dir, f"{pair_id}.json")
+            if sys.platform == "win32":
+                folder_path, file_name = os.path.split(str(ann_path))
+                safe_file_name = file_name.replace(":", "_")
+                ann_path = os.path.join(folder_path, safe_file_name)
             anno = load_pair_annotation_json(ann_path)
             cat = str(anno["category"])
             if self.category_filter is not None and cat != self.category_filter:
