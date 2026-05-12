@@ -93,6 +93,7 @@ LORA_LR: float = 1e-3
 LORA_ALPHA: float = 16.0
 PRECISION: str = "auto"
 COMPILE: bool = True  # silently no-op on non-CUDA / Ampere<8.0 (see _training_common.maybe_compile_model)
+TRAIN_FINETUNE_NO_AUG: bool = True  # also run finetune without photometric augmentation
 FT_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {
     "sam_vit_b": 4,
     "sam_vit_l": 3,
@@ -384,6 +385,8 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["RUN_EXPORT_METRICS_TABLES"] = bool(toggles["run_export_metrics_tables"])
         if "run_pytest" in toggles:
             g["RUN_PYTEST"] = bool(toggles["run_pytest"])
+        if "train_finetune_no_aug" in toggles:
+            g["TRAIN_FINETUNE_NO_AUG"] = bool(toggles["train_finetune_no_aug"])
         if "train_finetune_size_variants" in toggles:
             g["TRAIN_FINETUNE_SIZE_VARIANTS"] = bool(toggles["train_finetune_size_variants"])
         if "train_lora_size_variants" in toggles:
@@ -467,6 +470,7 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "EVAL_LAYER_INDICES_LIST": list(EVAL_LAYER_INDICES_LIST),
         "RUN_EXPORT_METRICS_TABLES": RUN_EXPORT_METRICS_TABLES,
         "RUN_PYTEST": RUN_PYTEST,
+        "TRAIN_FINETUNE_NO_AUG": TRAIN_FINETUNE_NO_AUG,
     }
 
 
@@ -561,8 +565,9 @@ def _run_script(cwd: Path, rel_script: str, args: Sequence[str], logger: Pipelin
     return _run_cmd(cwd, [sys.executable, str(cwd / rel_script), *args], logger)
 
 
-def _default_finetune_ckpt_for(cwd: Path, backbone: str, n_blocks: int) -> str:
-    return str(cwd / CHECKPOINT_DIR / f"{backbone}_lastblocks{n_blocks}_best.pt")
+def _default_finetune_ckpt_for(cwd: Path, backbone: str, n_blocks: int, *, noaug: bool = False) -> str:
+    suffix = "_noaug" if noaug else ""
+    return str(cwd / CHECKPOINT_DIR / f"{backbone}_lastblocks{n_blocks}{suffix}_best.pt")
 
 
 def _default_lora_ckpt(cwd: Path, backbone: str) -> str:
@@ -693,6 +698,22 @@ def _build_eval_specs(
                 wsa_temperature=WSA_TEMPERATURE,
                 **bk,
             ))
+
+        if TRAIN_FINETUNE_NO_AUG and RUN_EVAL_FINETUNED_CHECKPOINT[idx]:
+            for nb in LAST_BLOCKS_LIST:
+                na_ck_path = _default_finetune_ckpt_for(cwd, backbone, nb, noaug=True)
+                na_ck = _resolve_ckpt_path(cwd, na_ck_path)
+                if na_ck:
+                    specs.append(EvalRunSpec(name=f"{backbone}_ft_lb{nb}_noaug", checkpoint=na_ck, **bk))
+                    if RUN_EVAL_FINETUNED_WSA[idx]:
+                        specs.append(EvalRunSpec(
+                            name=f"{backbone}_ft_lb{nb}_noaug_wsa",
+                            checkpoint=na_ck,
+                            use_window_soft_argmax=True,
+                            wsa_window=WSA_WINDOW,
+                            wsa_temperature=WSA_TEMPERATURE,
+                            **bk,
+                        ))
 
     # Size variant backbone evals
     if RUN_EVAL_SIZE_VARIANTS:
@@ -1068,6 +1089,54 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             if PIPELINE_RESUME:
                 _ps.mark_step_done(cwd, state, ft_sid)
             _trace_stage(cwd, logger, "done", ft_sid, exit_code=0)
+
+    if TRAIN_FINETUNE_NO_AUG:
+        for i, backbone in enumerate(BACKBONE_NAMES):
+            if not TRAIN_FINETUNE[i]:
+                continue
+            if backbone == "sam_vit_b" and not effective_sam:
+                logger.log_line("ERROR: TRAIN_FINETUNE_NO_AUG for SAM requires SAM_CHECKPOINT.", err=True)
+                return 2
+            for nb in LAST_BLOCKS_LIST:
+                ft_sid = f"finetune_noaug:{backbone}:lb{nb}"
+                if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), ft_sid):
+                    logger.log_line(f"[SKIP] stage_id={ft_sid}")
+                    _trace_stage(cwd, logger, "skip", ft_sid, reason="already_completed")
+                    continue
+                ft_bs = _resolve_batch_size("finetune", backbone)
+                ft_h, ft_w = _resolve_image_hw(backbone)
+                args = [
+                    "--mode", "finetune",
+                    *base_train,
+                    "--height", str(ft_h),
+                    "--width", str(ft_w),
+                    "--batch-size", str(ft_bs),
+                    "--lr", str(FT_LR),
+                    "--weight-decay", str(FT_WEIGHT_DECAY),
+                    "--backbone", backbone,
+                    "--epochs", str(FT_EPOCHS),
+                    "--patience", str(FT_PATIENCE),
+                    "--min-delta", str(FT_MIN_DELTA),
+                    "--last-blocks", str(nb),
+                    "--layer-indices", str(DINO_LAYER_INDICES),
+                    "--no-augment",
+                ]
+                if FT_ACCUMULATION_STEPS > 1:
+                    args.extend(["--accumulation-steps", str(FT_ACCUMULATION_STEPS)])
+                logger.log_line(f"stage_id={ft_sid} batch_size={ft_bs} precision={eff_precision}")
+                resume_file = (cwd / CHECKPOINT_DIR / f"{backbone}_lastblocks{nb}_noaug_resume.pt").resolve()
+                if PIPELINE_RESUME and resume_file.is_file():
+                    args.extend(["--resume", str(resume_file)])
+                    logger.log_line(f"[RESUME] stage_id={ft_sid} checkpoint={resume_file}")
+                    _trace_stage(cwd, logger, "resume_prepare", ft_sid, path=str(resume_file))
+                _trace_stage(cwd, logger, "start", ft_sid)
+                rc = _run_script(cwd, "scripts/train.py", args, logger)
+                if rc != 0:
+                    _trace_stage(cwd, logger, "fail", ft_sid, exit_code=rc)
+                    return rc
+                if PIPELINE_RESUME:
+                    _ps.mark_step_done(cwd, state, ft_sid)
+                _trace_stage(cwd, logger, "done", ft_sid, exit_code=0)
 
     for i, backbone in enumerate(BACKBONE_NAMES):
         if not TRAIN_LORA[i]:

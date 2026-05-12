@@ -40,15 +40,16 @@ class RunInfo:
 
     name: str
     backbone: str
-    method: str  # one of: baseline, ft_lbN, lora
+    method: str  # one of: baseline, ft_lbN, ft_lbN_noaug, lora
     last_blocks: Optional[int]
     wsa: bool
     wsa_window: Optional[int] = None
     layer_index: Optional[int] = None
+    augmented: Optional[bool] = None  # None for baseline; True/False for trained methods
 
 
 _RUN_NAME_RE = re.compile(
-    r"^(?P<bb>dinov2_vitb14|dinov3_vitb16|sam_vit_b)"
+    r"^(?P<bb>(?:dinov[23]|sam)_vit[a-z0-9]+)"
     r"_(?P<rest>.+)$"
 )
 
@@ -71,14 +72,19 @@ def parse_run_name(name: str) -> Optional[RunInfo]:
     wsa = rest.endswith("_wsa")
     if wsa:
         rest = rest[: -len("_wsa")]
+
+    noaug = rest.endswith("_noaug")
+    if noaug:
+        rest = rest[: -len("_noaug")]
+
     if rest == "baseline":
         return RunInfo(name, bb, "baseline", None, wsa)
     if rest == "lora":
-        return RunInfo(name, bb, "lora", None, wsa)
+        return RunInfo(name, bb, "lora", None, wsa, augmented=True)
     m2 = re.match(r"^ft_lb(\d+)$", rest)
     if m2:
         n = int(m2.group(1))
-        return RunInfo(name, bb, f"ft_lb{n}", n, wsa)
+        return RunInfo(name, bb, f"ft_lb{n}", n, wsa, augmented=not noaug)
     return None
 
 
@@ -138,12 +144,13 @@ def build_master_table(pck_data: Dict[str, Any]) -> "Any":
             "method": info.method,
             "last_blocks": info.last_blocks,
             "wsa": info.wsa,
+            "augmented": info.augmented,
         }
         row.update({k: v for k, v in (r.get("metrics") or {}).items()
                     if isinstance(v, (int, float))})
         rows.append(row)
     if not rows:
-        return pd.DataFrame(columns=["backbone", "method", "last_blocks", "wsa"])
+        return pd.DataFrame(columns=["backbone", "method", "last_blocks", "wsa", "augmented"])
     df = pd.DataFrame(rows)
 
     bb_order = {bb: i for i, bb in enumerate(BACKBONES_ORDER)}
@@ -734,6 +741,77 @@ def plot_dino_layer_sensitivity(
     )
 
 
+# ---------------------------------------------------------------------------
+# Plot: augmentation ablation
+# ---------------------------------------------------------------------------
+
+
+def plot_aug_ablation(
+    df_master: "Any", out_path: Path, *, alpha: float = 0.1
+) -> Tuple[Path, Path]:
+    """Paired bars comparing finetune with vs. without photometric augmentation."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    apply_paper_style()
+    metric = f"pck@{alpha:g}"
+
+    if "augmented" not in df_master.columns or metric not in df_master.columns:
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.text(0.5, 0.5, "No augmentation ablation data", ha="center", va="center",
+                transform=ax.transAxes)
+        return save_figure_dual(fig, out_path)
+
+    df = df_master[
+        (df_master["method"].str.startswith("ft_lb"))
+        & (~df_master["wsa"])
+        & (df_master[metric].notna())
+        & (df_master["augmented"].notna())
+    ].copy()
+
+    if df.empty:
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.text(0.5, 0.5, "No augmentation ablation data", ha="center", va="center",
+                transform=ax.transAxes)
+        return save_figure_dual(fig, out_path)
+
+    labels: List[str] = []
+    aug_vals: List[float] = []
+    noaug_vals: List[float] = []
+    for bb in [b for b in BACKBONES_ORDER if b in set(df["backbone"])]:
+        sub_bb = df[df["backbone"] == bb]
+        for lb in sorted(sub_bb["last_blocks"].dropna().unique().astype(int)):
+            sub = sub_bb[sub_bb["last_blocks"] == lb]
+            has_aug = (sub["augmented"] == True).any()
+            has_noaug = (sub["augmented"] == False).any()
+            if not (has_aug and has_noaug):
+                continue
+            v_aug = float(sub[sub["augmented"] == True][metric].mean())
+            v_noaug = float(sub[sub["augmented"] == False][metric].mean())
+            labels.append(f"{bb}\nlb{lb}")
+            aug_vals.append(v_aug)
+            noaug_vals.append(v_noaug)
+
+    if not labels:
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.text(0.5, 0.5, "Need both augmented and no-aug runs", ha="center", va="center",
+                transform=ax.transAxes)
+        return save_figure_dual(fig, out_path)
+
+    x = np.arange(len(labels))
+    width = 0.4
+    fig, ax = plt.subplots(figsize=(max(8, len(labels) * 1.1), 4))
+    ax.bar(x - width / 2, aug_vals, width, label="with augmentation")
+    ax.bar(x + width / 2, noaug_vals, width, label="no augmentation")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=8)
+    ax.set_ylabel(metric)
+    ax.set_title(f"Augmentation ablation at α = {alpha:g}")
+    ax.legend()
+    fig.tight_layout()
+    return save_figure_dual(fig, out_path)
+
+
 __all__ = [
     "BACKBONES_ORDER",
     "METHODS_ORDER",
@@ -749,6 +827,7 @@ __all__ = [
     "parse_run_name",
     "per_category_table",
     "per_difficulty_table",
+    "plot_aug_ablation",
     "plot_dino_layer_sensitivity",
     "plot_ft_depth",
     "plot_lora_vs_ft",

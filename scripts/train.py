@@ -105,6 +105,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--accumulation-steps", type=int, default=1,
                    help="Gradient accumulation: optimizer step every N micro-batches. "
                         "Effective batch = batch_size * accumulation_steps.")
+    p.add_argument("--no-augment", action="store_true",
+                   help="Disable photometric augmentation during training (finetune mode).")
     return p.parse_args()
 
 
@@ -162,8 +164,9 @@ def main() -> int:
             weight_decay=args.weight_decay,
             fused=fused_opt,
         )
-        tag = f"{args.backbone}_lastblocks{args.last_blocks}"
-        history_name = f"{args.backbone}_ft_lb{args.last_blocks}_history.jsonl"
+        _noaug_suffix = "_noaug" if args.no_augment else ""
+        tag = f"{args.backbone}_lastblocks{args.last_blocks}{_noaug_suffix}"
+        history_name = f"{args.backbone}_ft_lb{args.last_blocks}{_noaug_suffix}_history.jsonl"
         extra_resume_payload = None
         epoch_log_suffix = None
         script_tag = "train_finetune"
@@ -220,7 +223,7 @@ def main() -> int:
         preprocess=mode,
         output_size_hw=(args.height, args.width),
         normalize=True,
-        photometric_augment=build_photometric_pair_transform(),
+        photometric_augment=None if args.no_augment else build_photometric_pair_transform(),
     )
     val_ds = SPair71kPairDataset(
         spair_root=root,
