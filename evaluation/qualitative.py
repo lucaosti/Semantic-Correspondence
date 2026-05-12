@@ -299,6 +299,12 @@ def render_method_comparison_grid(
     src_kps = sample["src_kps"].cpu().numpy()
     gt_kps = sample["tgt_kps"].cpu().numpy()
 
+    # Keypoint names — handle single-sample (list of str) and batched (list of lists).
+    _raw_names = sample.get("src_kp_names") or []
+    if _raw_names and isinstance(_raw_names[0], list):
+        _raw_names = _raw_names[0]
+    kp_names: List[str] = list(_raw_names) if _raw_names else []
+
     for row, (label, extractor) in enumerate(extractors.items()):
         wsa = use_wsa_per_label.get(label, False)
         result = predict_pair(
@@ -310,6 +316,17 @@ def render_method_comparison_grid(
         dist = np.linalg.norm(pred - gt_kps, axis=-1)
         correct = (dist <= alpha * pck_thr) & valid
 
+        ambiguous_set: set = set()
+        if kp_names:
+            _named = [(kp_names[i] if i < len(kp_names) else "", float(src_kps[i, 0]), float(src_kps[i, 1])) for i in range(len(src_kps))]
+            ambiguous_set = set(find_symmetry_ambiguity(
+                src_kps_named=_named,
+                pred_kps_xy=[(float(pred[i, 0]), float(pred[i, 1])) for i in range(len(pred))],
+                gt_kps_xy=[(float(gt_kps[i, 0]), float(gt_kps[i, 1])) for i in range(len(gt_kps))],
+                pck_threshold=pck_thr,
+                alpha=alpha,
+            ))
+
         ax_s, ax_t = axes[row, 0], axes[row, 1]
         ax_s.imshow(src_np)
         ax_s.axis("off")
@@ -320,7 +337,12 @@ def render_method_comparison_grid(
         for i in range(len(src_kps)):
             if not valid[i]:
                 continue
-            color = "tab:green" if correct[i] else "tab:red"
+            if correct[i]:
+                color = "tab:green"
+            elif i in ambiguous_set:
+                color = "tab:orange"
+            else:
+                color = "tab:red"
             ax_s.scatter(src_kps[i, 0], src_kps[i, 1], s=40, c=color,
                          edgecolors="white", linewidths=0.5, zorder=5)
             ax_t.scatter(pred[i, 0], pred[i, 1], s=40, c=color, marker="x",

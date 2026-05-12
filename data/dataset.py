@@ -351,6 +351,7 @@ class _PairRecord:
     scale_variation: float
     truncation: float
     occlusion: float
+    src_kp_names: Optional[List[str]] = None
 
 
 class SPair71kPairDataset(Dataset):
@@ -435,6 +436,16 @@ class SPair71kPairDataset(Dataset):
             kp_ids_raw = anno.get("kps_ids") or anno.get("kps_index") or list(range(int(src_kps_xy.shape[0])))
             kp_ids_t = torch.tensor([int(x) for x in kp_ids_raw], dtype=torch.int64).view(-1)
 
+            # Extract keypoint names from category descriptor list (optional; graceful fallback).
+            _kps_desc = anno.get("kps") or []
+            if _kps_desc and isinstance(_kps_desc[0], dict):
+                _all_names = [str(d.get("name", "")) for d in _kps_desc]
+                _kp_names = [_all_names[int(i)] if int(i) < len(_all_names) else "" for i in kp_ids_raw]
+            elif _kps_desc and isinstance(_kps_desc[0], str):
+                _kp_names = [str(n) for n in _kps_desc]
+            else:
+                _kp_names = []
+
             src_path = os.path.join(self.paths.images_dir, cat, f"{src_stem}.jpg")
             tgt_path = os.path.join(self.paths.images_dir, cat, f"{tgt_stem}.jpg")
             for p in (src_path, tgt_path):
@@ -456,6 +467,7 @@ class SPair71kPairDataset(Dataset):
                     scale_variation=float(anno.get("scale_variation", 0)),
                     truncation=float(anno.get("truncation", 0)),
                     occlusion=float(anno.get("occlusion", 0)),
+                    src_kp_names=_kp_names if _kp_names else None,
                 )
             )
 
@@ -527,6 +539,13 @@ class SPair71kPairDataset(Dataset):
         if n_valid > 0:
             kp_ids_pad[:n_valid] = rec.kp_ids[:n_valid]
 
+        # Keypoint names padded to MAX_KEYPOINTS with "" for invalid slots.
+        if rec.src_kp_names is not None:
+            _names = list(rec.src_kp_names[:n_valid]) + [""] * max(0, MAX_KEYPOINTS - min(n_valid, len(rec.src_kp_names)))
+        else:
+            _names = [""] * MAX_KEYPOINTS
+        src_kp_names_padded = _names[:MAX_KEYPOINTS]
+
         return {
             "pair_id_str": rec.pair_id,
             "category": rec.category,
@@ -546,6 +565,7 @@ class SPair71kPairDataset(Dataset):
             "scale_variation": torch.tensor([rec.scale_variation], dtype=torch.float32),
             "truncation": torch.tensor([rec.truncation], dtype=torch.float32),
             "occlusion": torch.tensor([rec.occlusion], dtype=torch.float32),
+            "src_kp_names": src_kp_names_padded,
         }
 
 
@@ -557,12 +577,13 @@ def _apply_normalize(
 
 
 def spair_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Stack tensor fields; keep ``pair_id_str`` and ``category`` as ``list[str]``."""
+    """Stack tensor fields; keep string-list fields as nested Python lists."""
     if len(batch) == 0:
         raise ValueError("Empty batch.")
     out: Dict[str, Any] = {}
+    _str_list_keys = {"pair_id_str", "category", "src_kp_names"}
     for k in batch[0].keys():
-        if k in ("pair_id_str", "category"):
+        if k in _str_list_keys:
             out[k] = [b[k] for b in batch]
             continue
         out[k] = torch.stack([b[k] for b in batch], dim=0)
