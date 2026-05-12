@@ -4,7 +4,7 @@
 \subsection{Experimental Setup}
 \paragraph{Dataset and Metrics.} We evaluate our models on the SPair-71k benchmark~\cite{min2019spair}. Following strict validation protocols, the training split is used for optimization, the validation split for hyperparameter tuning, and the test split exclusively for final reporting. Performance is measured using the Percentage of Correct Keypoints (PCK) metric at thresholds $\alpha \in \{0.05, 0.1, 0.2\}$, normalized by the target object's bounding box size.
 
-\paragraph{Implementation Details.} Experiments are conducted using the Base (ViT-B) variants of DINOv2, DINOv3, and SAM. For the fine-tuning and LoRA stages, optimization is performed via AdamW using a Gaussian Cross-Entropy loss (fine-tuning LR $5\times10^{-5}$, LoRA LR $10^{-3}$, weight decay $0.01$). Due to memory constraints, the batch size is set to 20 for DINO backbones and 4 for SAM. Input images are resized to fixed resolutions: $518\times518$ for DINOv2 and $512\times512$ for DINOv3 and SAM. Training uses early stopping with patience 7 on validation loss; LoRA adapters (rank 8, $\alpha{=}16$) are applied to the last 2 transformer blocks.
+\paragraph{Implementation Details.} Experiments are conducted using the Base (ViT-B) variants of DINOv2, DINOv3, and SAM. For the fine-tuning and LoRA stages, optimization is performed via AdamW using a Gaussian Cross-Entropy loss (fine-tuning LR $5\times10^{-5}$, LoRA LR $10^{-3}$, weight decay $0.01$). Due to memory constraints, the batch size is set to 20 for DINO backbones and 4 for SAM. Input images are resized to fixed resolutions: $518\times518$ for DINOv2 and $512\times512$ for DINOv3 and SAM. Training uses early stopping with patience 7 on validation loss. LoRA adapters (rank 8, $\alpha{=}16$) are applied to the MLP layers of the last $N$ transformer blocks, where $N$ is swept over $\{1, 2, 4\}$ as an ablation (Section~\ref{sec:ablations}). For fine-tuning, we additionally run a no-augmentation variant to quantify the effect of photometric data augmentation. Throughput (images/sec) and peak GPU memory are measured after three warm-up batches to characterize computational efficiency.
 
 \subsection{Quantitative Results}
 Table~\ref{tab:quantitative_results} summarizes the PCK performance of all evaluated backbones across methodological stages. Per-image (macro) PCK is reported; per-keypoint (micro) results are provided in the supplementary material. All values are measured on the SPair-71k test split.
@@ -47,13 +47,25 @@ Table~\ref{tab:quantitative_results} summarizes the PCK performance of all evalu
         SAM    (ViT-B) & FT (Argmax) & 4 & — & — & — \\
         SAM    (ViT-B) & FT + WSA    & 4 & — & — & — \\
         \midrule
-        \multicolumn{6}{l}{\textit{LoRA (last 2 blocks, rank 8)}} \\
+        \multicolumn{6}{l}{\textit{LoRA (rank 8, $\alpha{=}16$, last $N$ blocks)}} \\
+        DINOv2 (ViT-B) & LoRA (Argmax) & 1 & — & — & — \\
+        DINOv2 (ViT-B) & LoRA + WSA    & 1 & — & — & — \\
         DINOv2 (ViT-B) & LoRA (Argmax) & 2 & — & — & — \\
         DINOv2 (ViT-B) & LoRA + WSA    & 2 & — & — & — \\
+        DINOv2 (ViT-B) & LoRA (Argmax) & 4 & — & — & — \\
+        DINOv2 (ViT-B) & LoRA + WSA    & 4 & — & — & — \\
+        DINOv3 (ViT-B) & LoRA (Argmax) & 1 & — & — & — \\
+        DINOv3 (ViT-B) & LoRA + WSA    & 1 & — & — & — \\
         DINOv3 (ViT-B) & LoRA (Argmax) & 2 & — & — & — \\
         DINOv3 (ViT-B) & LoRA + WSA    & 2 & — & — & — \\
+        DINOv3 (ViT-B) & LoRA (Argmax) & 4 & — & — & — \\
+        DINOv3 (ViT-B) & LoRA + WSA    & 4 & — & — & — \\
+        SAM    (ViT-B) & LoRA (Argmax) & 1 & — & — & — \\
+        SAM    (ViT-B) & LoRA + WSA    & 1 & — & — & — \\
         SAM    (ViT-B) & LoRA (Argmax) & 2 & — & — & — \\
         SAM    (ViT-B) & LoRA + WSA    & 2 & — & — & — \\
+        SAM    (ViT-B) & LoRA (Argmax) & 4 & — & — & — \\
+        SAM    (ViT-B) & LoRA + WSA    & 4 & — & — & — \\
         \bottomrule
     \end{tabular}
     }
@@ -72,6 +84,7 @@ Visualizing predictions provides critical insights into the models' geometric an
 \end{figure}
 
 \subsection{Ablation Studies}
+\label{sec:ablations}
 
 \paragraph{WSA Window Size.}
 To quantify the sensitivity of Windowed Soft-Argmax to the window hyperparameter, we sweep over window sizes $w \in \{3, 5, 7, 9\}$ on the frozen baseline (no fine-tuning). The argmax location is fixed; only the local soft-argmax region changes. Results are reported at PCK@0.10.
@@ -84,3 +97,15 @@ Terminal ViT layers aggregate global classification information, which can reduc
 \paragraph{Fine-Tuning Depth.}
 The number of unfrozen transformer blocks ($N \in \{1, 2, 4\}$) controls the adaptation capacity. We analyze how PCK evolves with fine-tuning depth across all three backbones, measuring the trade-off between added trainable parameters and correspondence quality.
 \TODO{Insert fine-tuning depth figure from AML\_Analysis.ipynb §C.2 (\texttt{runs/paper\_figures/figures/ft\_depth.pdf}). Discuss the sweet spot between frozen and fully fine-tuned configurations.}
+
+\paragraph{LoRA Depth.}
+Analogously to the fine-tuning depth ablation, we sweep the number of LoRA-equipped blocks over $N \in \{1, 2, 4\}$ for each backbone. This isolates the contribution of adaptation depth from the parameter budget, as rank and $\alpha$ are kept fixed.
+\TODO{Insert LoRA depth figure from AML\_Analysis.ipynb (\texttt{runs/paper\_figures/figures/lora\_depth.pdf}). Report whether the LoRA depth trend mirrors the fine-tuning depth trend, and identify the optimal $N$ per backbone.}
+
+\paragraph{Photometric Augmentation.}
+To measure the regularization benefit of photometric data augmentation during fine-tuning, we run each fine-tuning configuration (backbone $\times$ block count) a second time with augmentation disabled. The no-augmentation variant uses identical hyperparameters and the same early-stopping criterion.
+\TODO{Insert augmentation ablation figure from AML\_Analysis.ipynb (\texttt{runs/paper\_figures/figures/aug\_ablation.pdf}). Report the average $\Delta$PCK@0.10 attributable to augmentation and whether its benefit is uniform across backbones and block counts.}
+
+\paragraph{Computational Efficiency.}
+We evaluate the computational cost of each configuration by measuring inference throughput (images/sec) and peak GPU memory allocation. Throughput is estimated over 10 batches after a 3-batch warm-up to exclude GPU initialization overhead. This allows direct comparison of the accuracy--efficiency trade-off across backbone size, method, and adaptation depth.
+\TODO{Insert efficiency scatter plot from AML\_Analysis.ipynb (\texttt{runs/paper\_figures/figures/efficiency\_scatter.pdf}). Report peak memory and throughput for baseline, best FT, and best LoRA configurations. Cite \texttt{runs/pipeline\_exports/efficiency\_results.json} for exact values.}
