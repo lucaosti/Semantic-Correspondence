@@ -53,7 +53,7 @@ class RunInfo:
 
 
 _RUN_NAME_RE = re.compile(
-    r"^(?P<bb>(?:dinov[23]|sam)_vit[a-z0-9]+)"
+    r"^(?P<bb>(?:dinov[23]_vit[a-z0-9]+|sam_vit_[a-z]))"
     r"_(?P<rest>.+)$"
 )
 
