@@ -60,7 +60,7 @@ def test_dense_extractor_dinov2_random_init():
 def test_dense_extractor_dinov3_with_local_weights():
     cfg = DenseExtractorConfig(
         name=BackboneName.DINOV3_VIT_B16,
-        dinov3_weights_path=str(DINOV3_WEIGHTS),
+        weights_path=str(DINOV3_WEIGHTS),
     )
     extractor = DenseFeatureExtractor(cfg).eval()
     x = torch.randn(1, 3, 224, 224)
@@ -73,7 +73,7 @@ def test_dense_extractor_dinov3_with_local_weights():
 def test_dense_extractor_sam_with_local_weights():
     cfg = DenseExtractorConfig(
         name=BackboneName.SAM_VIT_B,
-        sam_checkpoint_path=str(SAM_WEIGHTS),
+        weights_path=str(SAM_WEIGHTS),
     )
     extractor = DenseFeatureExtractor(cfg).eval()
     x = torch.randn(1, 3, 512, 512)
