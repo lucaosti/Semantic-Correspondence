@@ -169,12 +169,7 @@ def load_method_extractors(
         try:
             cfg = DenseExtractorConfig(
                 name=BackboneName(spec.backbone),
-                dinov2_weights_path=pretrained_paths.get("dinov2_vitb14")
-                if spec.backbone == "dinov2_vitb14" else None,
-                dinov3_weights_path=pretrained_paths.get("dinov3_vitb16")
-                if spec.backbone == "dinov3_vitb16" else None,
-                sam_checkpoint_path=pretrained_paths.get("sam_vit_b")
-                if spec.backbone == "sam_vit_b" else None,
+                weights_path=pretrained_paths.get(spec.backbone),
             )
             extractor = DenseFeatureExtractor(cfg, freeze=True)
             if spec.method == "lora":

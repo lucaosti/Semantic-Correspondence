@@ -65,7 +65,11 @@ def parse_args() -> argparse.Namespace:
         "--backbone",
         type=str,
         default="dinov2_vitb14",
-        choices=["dinov2_vitb14", "dinov3_vitb16", "sam_vit_b"],
+        choices=[
+            "dinov2_vits14", "dinov2_vitb14", "dinov2_vitl14",
+            "dinov3_vits16", "dinov3_vitb16", "dinov3_vitl16",
+            "sam_vit_b", "sam_vit_l",
+        ],
     )
     p.add_argument("--dinov2-weights", type=str, default=None)
     p.add_argument("--dinov3-weights", type=str, default=None)
@@ -116,22 +120,29 @@ def main() -> int:
     if not os.path.isdir(root):
         print(f"ERROR: SPair-71k not found at: {root}", file=sys.stderr)
         return 2
-    if args.backbone == "sam_vit_b" and args.sam_checkpoint is None:
-        print("ERROR: --sam-checkpoint is required for backbone sam_vit_b.", file=sys.stderr)
+    if args.backbone.startswith("sam") and args.sam_checkpoint is None:
+        print(f"ERROR: --sam-checkpoint is required for backbone {args.backbone}.", file=sys.stderr)
         return 2
 
     device = torch.device(resolve_device_str(args.device))
     num_workers = resolve_num_workers(args.num_workers, accelerator=device.type)
     maybe_tune_threads_for_cpu_device(device.type, dataloader_workers=num_workers)
 
+    # Resolve the single weights_path for the selected backbone.
+    bname = args.backbone
+    if bname.startswith("dinov2"):
+        _weights_path = args.dinov2_weights
+    elif bname.startswith("dinov3"):
+        _weights_path = args.dinov3_weights
+    else:
+        _weights_path = args.sam_checkpoint
+
     # Build the unified feature extractor (wraps the backbone). The training step calls it
     # directly; the underlying encoder is `extractor.encoder`, on which we apply
     # freezing / unfreezing / LoRA injection.
     extractor_cfg = DenseExtractorConfig(
-        name=BackboneName(args.backbone),
-        dinov2_weights_path=args.dinov2_weights,
-        dinov3_weights_path=args.dinov3_weights,
-        sam_checkpoint_path=args.sam_checkpoint,
+        name=BackboneName(bname),
+        weights_path=_weights_path,
         dino_layer_indices=args.layer_indices,
     )
     extractor = DenseFeatureExtractor(extractor_cfg, freeze=True).to(device)
@@ -164,7 +175,7 @@ def main() -> int:
             )
 
     else:  # lora
-        if args.backbone == "sam_vit_b":
+        if args.backbone.startswith("sam"):
             lora_params = apply_lora_to_last_blocks_mlp_sam(
                 encoder, last_n_blocks=args.last_blocks, rank=args.rank, alpha=args.alpha,
             )

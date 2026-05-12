@@ -58,11 +58,16 @@ class EvalRunSpec:
     dino_layer_indices: Any = field(default_factory=lambda: 4)
 
     def to_dense_config(self) -> DenseExtractorConfig:
+        bname = self.backbone
+        if bname.startswith("dinov2"):
+            wp = self.dinov2_weights
+        elif bname.startswith("dinov3"):
+            wp = self.dinov3_weights
+        else:
+            wp = self.sam_checkpoint
         return DenseExtractorConfig(
-            name=BackboneName(self.backbone),
-            dinov2_weights_path=self.dinov2_weights,
-            dinov3_weights_path=self.dinov3_weights,
-            sam_checkpoint_path=self.sam_checkpoint,
+            name=BackboneName(bname),
+            weights_path=wp,
             dino_layer_indices=self.dino_layer_indices,
         )
 
