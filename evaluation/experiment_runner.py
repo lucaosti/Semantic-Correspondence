@@ -12,6 +12,7 @@ aggregation is computed in-house — no SD4Match dependency.
 from __future__ import annotations
 
 import contextlib
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -208,8 +209,20 @@ def run_spair_pck_eval(
         for f in _DIFFICULTY_FLAGS
     }
 
+    _WARMUP_BATCHES = 3
+    _TIMING_BATCHES = 10
+    if eval_device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(eval_device)
+    _batch_idx = 0
+    _t0: Optional[float] = None
+    _timing_images = 0
+
     with torch.inference_mode(), _autocast_eval(eval_device):
         for batch in loader:
+            if _batch_idx == _WARMUP_BATCHES:
+                if eval_device.type == "cuda":
+                    torch.cuda.synchronize(eval_device)
+                _t0 = time.perf_counter()
             src = batch["src_img"].to(eval_device, non_blocking=pin_mem)
             tgt = batch["tgt_img"].to(eval_device, non_blocking=pin_mem)
             src_kps = batch["src_kps"].to(eval_device)
@@ -256,6 +269,10 @@ def run_spair_pck_eval(
             correct_all = (dists.unsqueeze(0) <= alphas_t.view(-1, 1, 1) * pckthres.view(1, -1, 1)).cpu()
             n_valid_list = n_valid.cpu().tolist()
 
+            if _t0 is not None and _batch_idx < _WARMUP_BATCHES + _TIMING_BATCHES:
+                _timing_images += bsz
+            _batch_idx += 1
+
             diff_buckets = [
                 [(_flag_at(batch, f, b)) for f in _DIFFICULTY_FLAGS] for b in range(bsz)
             ]
@@ -278,6 +295,17 @@ def run_spair_pck_eval(
                             continue
                         diff_image[flag][bucket][key].append(img_pck)
                         diff_point[flag][bucket][key].extend(float(p) for p in cb)
+
+    if eval_device.type == "cuda":
+        torch.cuda.synchronize(eval_device)
+    _throughput = float("nan")
+    if _t0 is not None and _timing_images > 0:
+        _elapsed = time.perf_counter() - _t0
+        if _elapsed > 0:
+            _throughput = _timing_images / _elapsed
+    _peak_mb = float("nan")
+    if eval_device.type == "cuda":
+        _peak_mb = torch.cuda.max_memory_allocated(eval_device) / 1e6
 
     def _mean(xs: List[float]) -> float:
         return float(sum(xs) / len(xs)) if xs else float("nan")
@@ -308,6 +336,8 @@ def run_spair_pck_eval(
         "metrics": metrics,
         "spec": asdict(spec),
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "throughput_img_per_sec": _throughput,
+        "peak_memory_mb": _peak_mb,
         "sd4match_per_image": image_acc,
         "sd4match_per_point": point_acc,
         "sd4match_summary": {"image": summary_image, "point": summary_point},

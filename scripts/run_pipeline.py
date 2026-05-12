@@ -819,6 +819,33 @@ def _export_tables(
         logger.log_line(f"Wrote {path}.")
         return
 
+    # Export efficiency data alongside main results
+    eff_rows: List[Dict[str, Any]] = []
+    for r in results:
+        thr = r.get("throughput_img_per_sec")
+        mem = r.get("peak_memory_mb")
+        if thr is None and mem is None:
+            continue
+        info_: Optional[Any] = None
+        try:
+            from evaluation.figures import parse_run_name as _prn
+            info_ = _prn(str(r.get("name", "")))
+        except Exception:
+            pass
+        eff_rows.append({
+            "name": r.get("name"),
+            "backbone": info_.backbone if info_ else None,
+            "method": info_.method if info_ else None,
+            "throughput_img_per_sec": thr,
+            "peak_memory_mb": mem,
+            "pck@0.1": (r.get("metrics") or {}).get("pck@0.1"),
+        })
+    if eff_rows:
+        eff_path = out_dir / "efficiency_results.json"
+        with open(eff_path, "w", encoding="utf-8") as f:
+            json.dump(eff_rows, f, indent=2)
+        logger.log_line(f"Wrote {eff_path}.")
+
     rows = metrics_rows_for_table(results)
     json_path = out_dir / "pck_results.json"
     csv_path = out_dir / "pck_results.csv"

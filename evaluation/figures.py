@@ -113,7 +113,7 @@ def load_pck_exports(exports_dir: Path) -> Dict[str, Any]:
 
     Returns a dict with these keys (each is ``None`` if the file is missing):
     ``pck_results``, ``per_category``, ``by_difficulty_flag``, ``wsa_sweep``,
-    ``layer_sweep``. The ``available`` sub-dict reports presence on disk.
+    ``layer_sweep``, ``efficiency``. The ``available`` sub-dict reports presence on disk.
     """
     exports_dir = Path(exports_dir)
     files = {
@@ -122,6 +122,7 @@ def load_pck_exports(exports_dir: Path) -> Dict[str, Any]:
         "by_difficulty_flag": exports_dir / "pck_results_by_difficulty_flag.json",
         "wsa_sweep": exports_dir / "pck_results_wsa_sweep.json",
         "layer_sweep": exports_dir / "pck_results_layer_sweep.json",
+        "efficiency": exports_dir / "efficiency_results.json",
     }
     payload: Dict[str, Any] = {k: _read_json(p) for k, p in files.items()}
     payload["pck_results"] = payload.get("pck_results") or []
@@ -755,6 +756,113 @@ def plot_dino_layer_sensitivity(
 
 
 # ---------------------------------------------------------------------------
+# Efficiency table and scatter
+# ---------------------------------------------------------------------------
+
+
+def build_efficiency_table(
+    pck_data: Dict[str, Any],
+    ckpt_dir: Optional[Path] = None,
+    *,
+    rank: int = 8,
+) -> "Any":
+    """Build a DataFrame with throughput, peak memory and PCK@0.1 per run.
+
+    Columns: ``name``, ``backbone``, ``method``, ``trainable_params``,
+    ``throughput_img_per_sec``, ``peak_memory_mb``, ``pck@0.1``.
+    """
+    import pandas as pd
+
+    rows: List[Dict[str, Any]] = []
+    eff_data = pck_data.get("efficiency") or []
+    pck_lookup: Dict[str, float] = {}
+    for r in pck_data.get("pck_results") or []:
+        v = (r.get("metrics") or {}).get("pck@0.1")
+        if v is not None:
+            pck_lookup[str(r.get("name", ""))] = float(v)
+
+    for entry in eff_data:
+        name = str(entry.get("name", ""))
+        info = parse_run_name(name)
+        n_params = None
+        if info is not None and ckpt_dir is not None:
+            n_params = estimate_trainable_params(
+                info.backbone, info.method, ckpt_dir=ckpt_dir,
+                last_blocks=info.last_blocks, rank=rank,
+            )
+        rows.append({
+            "name": name,
+            "backbone": entry.get("backbone") or (info.backbone if info else None),
+            "method": entry.get("method") or (info.method if info else None),
+            "trainable_params": n_params,
+            "throughput_img_per_sec": entry.get("throughput_img_per_sec"),
+            "peak_memory_mb": entry.get("peak_memory_mb"),
+            "pck@0.1": entry.get("pck@0.1") or pck_lookup.get(name),
+        })
+    if not rows:
+        return pd.DataFrame(columns=[
+            "name", "backbone", "method", "trainable_params",
+            "throughput_img_per_sec", "peak_memory_mb", "pck@0.1",
+        ])
+    return pd.DataFrame(rows)
+
+
+def plot_efficiency_scatter(
+    pck_data: Dict[str, Any],
+    out_path: Path,
+    ckpt_dir: Optional[Path] = None,
+    *,
+    rank: int = 8,
+) -> Tuple[Path, Path]:
+    """Scatter plot: PCK@0.1 (y) vs throughput (x, log), marker size ∝ peak memory."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    apply_paper_style()
+    df = build_efficiency_table(pck_data, ckpt_dir, rank=rank)
+    if df.empty or "throughput_img_per_sec" not in df.columns:
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.text(0.5, 0.5, "No efficiency data", ha="center", va="center", transform=ax.transAxes)
+        return save_figure_dual(fig, out_path)
+
+    df = df.dropna(subset=["throughput_img_per_sec", "pck@0.1"])
+    if df.empty:
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.text(0.5, 0.5, "No efficiency data with valid throughput", ha="center", va="center",
+                transform=ax.transAxes)
+        return save_figure_dual(fig, out_path)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    cmap = plt.get_cmap("tab10")
+    backbones = sorted(df["backbone"].dropna().unique())
+    for i, bb in enumerate(backbones):
+        sub = df[df["backbone"] == bb]
+        sizes = sub["peak_memory_mb"].fillna(200).clip(lower=50)
+        sizes_scaled = (sizes / sizes.max() * 400).clip(lower=30)
+        ax.scatter(
+            sub["throughput_img_per_sec"], sub["pck@0.1"],
+            s=sizes_scaled, c=[cmap(i / max(len(backbones) - 1, 1))] * len(sub),
+            alpha=0.8, label=bb,
+        )
+        for _, row in sub.iterrows():
+            ax.annotate(
+                str(row.get("method", "")),
+                (row["throughput_img_per_sec"], row["pck@0.1"]),
+                xytext=(4, 2), textcoords="offset points", fontsize=7, alpha=0.8,
+            )
+    ax.set_xscale("log")
+    ax.set_xlabel("Throughput (images/sec, log scale)")
+    ax.set_ylabel("PCK@0.1 (image macro)")
+    ax.set_title("Efficiency: throughput vs PCK (marker size ∝ peak memory)")
+    ax.legend(title="backbone")
+    # Size legend note
+    ax.text(0.98, 0.02, "Marker size ∝ peak GPU memory",
+            ha="right", va="bottom", transform=ax.transAxes, fontsize=7, alpha=0.7)
+    fig.tight_layout()
+    return save_figure_dual(fig, out_path)
+
+
+# ---------------------------------------------------------------------------
 # Plot: LoRA last-blocks depth sweep
 # ---------------------------------------------------------------------------
 
@@ -873,6 +981,7 @@ __all__ = [
     "PCK_ALPHAS_DEFAULT",
     "RunInfo",
     "apply_paper_style",
+    "build_efficiency_table",
     "build_master_table",
     "dataframe_to_latex",
     "dataframe_to_markdown",
@@ -883,6 +992,7 @@ __all__ = [
     "per_category_table",
     "per_difficulty_table",
     "plot_aug_ablation",
+    "plot_efficiency_scatter",
     "plot_dino_layer_sensitivity",
     "plot_ft_depth",
     "plot_lora_depth",
