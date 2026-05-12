@@ -215,6 +215,7 @@ def run_spair_pck_eval(
         torch.cuda.reset_peak_memory_stats(eval_device)
     _batch_idx = 0
     _t0: Optional[float] = None
+    _t1: Optional[float] = None
     _timing_images = 0
 
     with torch.inference_mode(), _autocast_eval(eval_device):
@@ -271,6 +272,10 @@ def run_spair_pck_eval(
 
             if _t0 is not None and _batch_idx < _WARMUP_BATCHES + _TIMING_BATCHES:
                 _timing_images += bsz
+                if _batch_idx == _WARMUP_BATCHES + _TIMING_BATCHES - 1:
+                    if eval_device.type == "cuda":
+                        torch.cuda.synchronize(eval_device)
+                    _t1 = time.perf_counter()
             _batch_idx += 1
 
             diff_buckets = [
@@ -300,7 +305,8 @@ def run_spair_pck_eval(
         torch.cuda.synchronize(eval_device)
     _throughput = float("nan")
     if _t0 is not None and _timing_images > 0:
-        _elapsed = time.perf_counter() - _t0
+        _end = _t1 if _t1 is not None else time.perf_counter()
+        _elapsed = _end - _t0
         if _elapsed > 0:
             _throughput = _timing_images / _elapsed
     _peak_mb = float("nan")
