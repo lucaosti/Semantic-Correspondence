@@ -255,3 +255,48 @@ def test_apply_yaml_eval_alphas_and_wsa(monkeypatch, tmp_path):
     assert rp.EVAL_ALPHAS == (0.1, 0.2)
     assert rp.WSA_WINDOW == 7
     assert rp.WSA_TEMPERATURE == 0.5
+
+
+def test_apply_yaml_train_finetune_no_aug(monkeypatch, tmp_path):
+    monkeypatch.setattr(rp, "TRAIN_FINETUNE_NO_AUG", True)
+    cfg = _write_yaml(tmp_path, {"workflow_toggles": {"train_finetune_no_aug": False}})
+    rp._apply_pipeline_yaml(cfg)
+    assert rp.TRAIN_FINETUNE_NO_AUG is False
+
+
+def test_apply_yaml_lora_last_blocks_list(monkeypatch, tmp_path):
+    monkeypatch.setattr(rp, "LORA_LAST_BLOCKS_LIST", [2])
+    cfg = _write_yaml(tmp_path, {"lora": {"last_blocks_list": [1, 2, 4]}})
+    rp._apply_pipeline_yaml(cfg)
+    assert rp.LORA_LAST_BLOCKS_LIST == [1, 2, 4]
+
+
+def test_apply_yaml_lora_last_blocks_list_scalar(monkeypatch, tmp_path):
+    monkeypatch.setattr(rp, "LORA_LAST_BLOCKS_LIST", [2])
+    cfg = _write_yaml(tmp_path, {"lora": {"last_blocks_list": 4}})
+    rp._apply_pipeline_yaml(cfg)
+    assert rp.LORA_LAST_BLOCKS_LIST == [4]
+
+
+def test_apply_yaml_backbone_size_variants(monkeypatch, tmp_path):
+    monkeypatch.setattr(rp, "BACKBONE_SIZE_VARIANTS", [])
+    cfg = _write_yaml(tmp_path, {
+        "workflow_toggles": {"backbone_size_variants": ["dinov2_vits14", "sam_vit_l"]}
+    })
+    rp._apply_pipeline_yaml(cfg)
+    assert rp.BACKBONE_SIZE_VARIANTS == ["dinov2_vits14", "sam_vit_l"]
+
+
+def test_apply_yaml_backbone_size_variants_invalid(tmp_path):
+    cfg = _write_yaml(tmp_path, {
+        "workflow_toggles": {"backbone_size_variants": ["unknown_vit_x"]}
+    })
+    with pytest.raises(ValueError):
+        rp._apply_pipeline_yaml(cfg)
+
+
+def test_fingerprint_includes_lora_last_blocks_list(monkeypatch):
+    monkeypatch.setattr(rp, "LORA_LAST_BLOCKS_LIST", [1, 2, 4])
+    payload = rp._fingerprint_payload()
+    assert "LORA_LAST_BLOCKS_LIST" in payload
+    assert sorted(payload["LORA_LAST_BLOCKS_LIST"]) == [1, 2, 4]
