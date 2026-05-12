@@ -57,7 +57,8 @@ SPAIR_ROOT: Optional[str] = None
 CHECKPOINT_DIR: str = "checkpoints"
 LAST_BLOCKS_LIST: List[int] = [1, 2, 4]
 LORA_RANK: int = 8
-LORA_LAST_BLOCKS: int = 2
+LORA_LAST_BLOCKS: int = 2  # kept for backward compat; LORA_LAST_BLOCKS_LIST takes precedence
+LORA_LAST_BLOCKS_LIST: List[int] = [1, 2, 4]
 
 DINOV2_WEIGHTS: Optional[str] = None
 DINOV3_WEIGHTS: Optional[str] = None
@@ -354,6 +355,9 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["LORA_BATCH_SIZE"] = int(lora["batch_size"])
         if lora.get("last_blocks") is not None:
             g["LORA_LAST_BLOCKS"] = int(lora["last_blocks"])
+        if lora.get("last_blocks_list") is not None:
+            lb_list = lora["last_blocks_list"]
+            g["LORA_LAST_BLOCKS_LIST"] = [int(x) for x in (lb_list if isinstance(lb_list, (list, tuple)) else [lb_list])]
         if lora.get("batch_size_by_backbone") is not None:
             g["LORA_BATCH_SIZE_BY_BACKBONE"] = _parse_backbone_int_map(
                 "lora.batch_size_by_backbone", lora["batch_size_by_backbone"]
@@ -412,6 +416,7 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "LAST_BLOCKS_LIST": LAST_BLOCKS_LIST,
         "LORA_RANK": LORA_RANK,
         "LORA_LAST_BLOCKS": LORA_LAST_BLOCKS,
+        "LORA_LAST_BLOCKS_LIST": sorted(LORA_LAST_BLOCKS_LIST),
         "FT_BATCH_SIZE": FT_BATCH_SIZE,
         "FT_EPOCHS": FT_EPOCHS,
         "FT_PATIENCE": FT_PATIENCE,
@@ -570,8 +575,9 @@ def _default_finetune_ckpt_for(cwd: Path, backbone: str, n_blocks: int, *, noaug
     return str(cwd / CHECKPOINT_DIR / f"{backbone}_lastblocks{n_blocks}{suffix}_best.pt")
 
 
-def _default_lora_ckpt(cwd: Path, backbone: str) -> str:
-    return str(cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_best.pt")
+def _default_lora_ckpt(cwd: Path, backbone: str, n_blocks: Optional[int] = None) -> str:
+    nb = n_blocks if n_blocks is not None else LORA_LAST_BLOCKS
+    return str(cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_lb{nb}_best.pt")
 
 
 def _resolve_ckpt_path(cwd: Path, path_str: str) -> Optional[str]:
@@ -682,22 +688,23 @@ def _build_eval_specs(
                     **bk,
                 ))
 
-        lora_ck_path = _default_lora_ckpt(cwd, backbone)
-        lora_ck = _resolve_ckpt_path(cwd, lora_ck_path)
-        if RUN_EVAL_LORA_CHECKPOINT[idx]:
-            if not lora_ck:
-                logger.log_line(f"WARNING: LoRA checkpoint not found: {lora_ck_path}", err=True)
-            else:
-                specs.append(EvalRunSpec(name=f"{backbone}_lora", checkpoint=lora_ck, **bk))
-        if RUN_EVAL_LORA_WSA[idx] and lora_ck:
-            specs.append(EvalRunSpec(
-                name=f"{backbone}_lora_wsa",
-                checkpoint=lora_ck,
-                use_window_soft_argmax=True,
-                wsa_window=WSA_WINDOW,
-                wsa_temperature=WSA_TEMPERATURE,
-                **bk,
-            ))
+        for lora_nb in LORA_LAST_BLOCKS_LIST:
+            lora_ck_path = _default_lora_ckpt(cwd, backbone, lora_nb)
+            lora_ck = _resolve_ckpt_path(cwd, lora_ck_path)
+            if RUN_EVAL_LORA_CHECKPOINT[idx]:
+                if not lora_ck:
+                    logger.log_line(f"WARNING: LoRA checkpoint not found: {lora_ck_path}", err=True)
+                else:
+                    specs.append(EvalRunSpec(name=f"{backbone}_lora_lb{lora_nb}", checkpoint=lora_ck, **bk))
+            if RUN_EVAL_LORA_WSA[idx] and lora_ck:
+                specs.append(EvalRunSpec(
+                    name=f"{backbone}_lora_lb{lora_nb}_wsa",
+                    checkpoint=lora_ck,
+                    use_window_soft_argmax=True,
+                    wsa_window=WSA_WINDOW,
+                    wsa_temperature=WSA_TEMPERATURE,
+                    **bk,
+                ))
 
         if TRAIN_FINETUNE_NO_AUG and RUN_EVAL_FINETUNED_CHECKPOINT[idx]:
             for nb in LAST_BLOCKS_LIST:
@@ -770,18 +777,19 @@ def _build_eval_specs(
                         wsa_temperature=WSA_TEMPERATURE,
                         **bk,
                     ))
-            lora_ck_path = _default_lora_ckpt(cwd, backbone)
-            lora_ck = _resolve_ckpt_path(cwd, lora_ck_path)
-            if lora_ck:
-                specs.append(EvalRunSpec(name=f"{backbone}_lora", checkpoint=lora_ck, **bk))
-                specs.append(EvalRunSpec(
-                    name=f"{backbone}_lora_wsa",
-                    checkpoint=lora_ck,
-                    use_window_soft_argmax=True,
-                    wsa_window=WSA_WINDOW,
-                    wsa_temperature=WSA_TEMPERATURE,
-                    **bk,
-                ))
+            for lora_nb in LORA_LAST_BLOCKS_LIST:
+                lora_ck_path = _default_lora_ckpt(cwd, backbone, lora_nb)
+                lora_ck = _resolve_ckpt_path(cwd, lora_ck_path)
+                if lora_ck:
+                    specs.append(EvalRunSpec(name=f"{backbone}_lora_lb{lora_nb}", checkpoint=lora_ck, **bk))
+                    specs.append(EvalRunSpec(
+                        name=f"{backbone}_lora_lb{lora_nb}_wsa",
+                        checkpoint=lora_ck,
+                        use_window_soft_argmax=True,
+                        wsa_window=WSA_WINDOW,
+                        wsa_temperature=WSA_TEMPERATURE,
+                        **bk,
+                    ))
 
     return specs
 
@@ -1144,45 +1152,55 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
         if backbone == "sam_vit_b" and not effective_sam:
             logger.log_line("ERROR: TRAIN_LORA for SAM requires SAM_CHECKPOINT.", err=True)
             return 2
-        lora_bs = _resolve_batch_size("lora", backbone)
-        lora_sid = f"lora:{backbone}"
-        if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), lora_sid):
-            logger.log_line(f"[SKIP] stage_id={lora_sid}")
-            _trace_stage(cwd, logger, "skip", lora_sid, reason="already_completed")
-            continue
-        lora_h, lora_w = _resolve_image_hw(backbone)
-        args = [
-            "--mode", "lora",
-            *base_train,
-            "--height", str(lora_h),
-            "--width", str(lora_w),
-            "--batch-size", str(lora_bs),
-            "--lr", str(LORA_LR),
-            "--alpha", str(LORA_ALPHA),
-            "--backbone", backbone,
-            "--epochs", str(LORA_EPOCHS),
-            "--patience", str(LORA_PATIENCE),
-            "--min-delta", str(LORA_MIN_DELTA),
-            "--last-blocks", str(LORA_LAST_BLOCKS),
-            "--rank", str(LORA_RANK),
-            "--layer-indices", str(DINO_LAYER_INDICES),
-        ]
-        if LORA_ACCUMULATION_STEPS > 1:
-            args.extend(["--accumulation-steps", str(LORA_ACCUMULATION_STEPS)])
-        logger.log_line(f"stage_id={lora_sid} batch_size={lora_bs} precision={eff_precision}")
-        resume_lora = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_resume.pt").resolve()
-        if PIPELINE_RESUME and resume_lora.is_file():
-            args.extend(["--resume", str(resume_lora)])
-            logger.log_line(f"[RESUME] stage_id={lora_sid} checkpoint={resume_lora}")
-            _trace_stage(cwd, logger, "resume_prepare", lora_sid, path=str(resume_lora))
-        _trace_stage(cwd, logger, "start", lora_sid)
-        rc = _run_script(cwd, "scripts/train.py", args, logger)
-        if rc != 0:
-            _trace_stage(cwd, logger, "fail", lora_sid, exit_code=rc)
-            return rc
-        if PIPELINE_RESUME:
-            _ps.mark_step_done(cwd, state, lora_sid)
-        _trace_stage(cwd, logger, "done", lora_sid, exit_code=0)
+        # Backward-compat: migrate old single-value lora checkpoint if present
+        _legacy = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_best.pt").resolve()
+        if _legacy.is_file():
+            for _nb in LORA_LAST_BLOCKS_LIST:
+                _new = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_lb{_nb}_best.pt").resolve()
+                if not _new.is_file() and _nb == LORA_LAST_BLOCKS:
+                    import shutil as _shutil
+                    _shutil.copy2(str(_legacy), str(_new))
+                    logger.log_line(f"[MIGRATE] copied {_legacy.name} → {_new.name}")
+        for lora_nb in LORA_LAST_BLOCKS_LIST:
+            lora_bs = _resolve_batch_size("lora", backbone)
+            lora_sid = f"lora:{backbone}:lb{lora_nb}"
+            if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), lora_sid):
+                logger.log_line(f"[SKIP] stage_id={lora_sid}")
+                _trace_stage(cwd, logger, "skip", lora_sid, reason="already_completed")
+                continue
+            lora_h, lora_w = _resolve_image_hw(backbone)
+            args = [
+                "--mode", "lora",
+                *base_train,
+                "--height", str(lora_h),
+                "--width", str(lora_w),
+                "--batch-size", str(lora_bs),
+                "--lr", str(LORA_LR),
+                "--alpha", str(LORA_ALPHA),
+                "--backbone", backbone,
+                "--epochs", str(LORA_EPOCHS),
+                "--patience", str(LORA_PATIENCE),
+                "--min-delta", str(LORA_MIN_DELTA),
+                "--last-blocks", str(lora_nb),
+                "--rank", str(LORA_RANK),
+                "--layer-indices", str(DINO_LAYER_INDICES),
+            ]
+            if LORA_ACCUMULATION_STEPS > 1:
+                args.extend(["--accumulation-steps", str(LORA_ACCUMULATION_STEPS)])
+            logger.log_line(f"stage_id={lora_sid} batch_size={lora_bs} precision={eff_precision}")
+            resume_lora = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_lb{lora_nb}_resume.pt").resolve()
+            if PIPELINE_RESUME and resume_lora.is_file():
+                args.extend(["--resume", str(resume_lora)])
+                logger.log_line(f"[RESUME] stage_id={lora_sid} checkpoint={resume_lora}")
+                _trace_stage(cwd, logger, "resume_prepare", lora_sid, path=str(resume_lora))
+            _trace_stage(cwd, logger, "start", lora_sid)
+            rc = _run_script(cwd, "scripts/train.py", args, logger)
+            if rc != 0:
+                _trace_stage(cwd, logger, "fail", lora_sid, exit_code=rc)
+                return rc
+            if PIPELINE_RESUME:
+                _ps.mark_step_done(cwd, state, lora_sid)
+            _trace_stage(cwd, logger, "done", lora_sid, exit_code=0)
 
     # Size variant backbone training
     for backbone in BACKBONE_SIZE_VARIANTS:
@@ -1258,12 +1276,13 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                 _trace_stage(cwd, logger, "done", ft_sid, exit_code=0)
 
         if TRAIN_LORA_SIZE_VARIANTS:
-            lora_bs = _resolve_batch_size("lora", backbone)
-            lora_sid = f"lora:{backbone}"
-            if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), lora_sid):
-                logger.log_line(f"[SKIP] stage_id={lora_sid}")
-                _trace_stage(cwd, logger, "skip", lora_sid, reason="already_completed")
-            else:
+            for lora_nb in LORA_LAST_BLOCKS_LIST:
+                lora_bs = _resolve_batch_size("lora", backbone)
+                lora_sid = f"lora:{backbone}:lb{lora_nb}"
+                if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), lora_sid):
+                    logger.log_line(f"[SKIP] stage_id={lora_sid}")
+                    _trace_stage(cwd, logger, "skip", lora_sid, reason="already_completed")
+                    continue
                 lora_h, lora_w = _resolve_image_hw(backbone)
                 args = [
                     "--mode", "lora",
@@ -1277,14 +1296,14 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                     "--epochs", str(LORA_EPOCHS),
                     "--patience", str(LORA_PATIENCE),
                     "--min-delta", str(LORA_MIN_DELTA),
-                    "--last-blocks", str(LORA_LAST_BLOCKS),
+                    "--last-blocks", str(lora_nb),
                     "--rank", str(LORA_RANK),
                     "--layer-indices", str(DINO_LAYER_INDICES),
                 ]
                 if LORA_ACCUMULATION_STEPS > 1:
                     args.extend(["--accumulation-steps", str(LORA_ACCUMULATION_STEPS)])
                 logger.log_line(f"stage_id={lora_sid} batch_size={lora_bs} precision={eff_precision}")
-                resume_lora = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_resume.pt").resolve()
+                resume_lora = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_lb{lora_nb}_resume.pt").resolve()
                 if PIPELINE_RESUME and resume_lora.is_file():
                     args.extend(["--resume", str(resume_lora)])
                     logger.log_line(f"[RESUME] stage_id={lora_sid} checkpoint={resume_lora}")

@@ -19,7 +19,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 PCK_ALPHAS_DEFAULT: Tuple[float, ...] = (0.05, 0.1, 0.2)
 BACKBONES_ORDER: Tuple[str, ...] = ("dinov2_vitb14", "dinov3_vitb16", "sam_vit_b")
-METHODS_ORDER: Tuple[str, ...] = ("baseline", "ft_lb1", "ft_lb2", "ft_lb4", "lora")
+METHODS_ORDER: Tuple[str, ...] = (
+    "baseline", "ft_lb1", "ft_lb2", "ft_lb4",
+    "lora", "lora_lb1", "lora_lb2", "lora_lb4",
+)
 
 _DIFFICULTY_FLAGS: Tuple[str, ...] = (
     "viewpoint_variation",
@@ -40,12 +43,13 @@ class RunInfo:
 
     name: str
     backbone: str
-    method: str  # one of: baseline, ft_lbN, ft_lbN_noaug, lora
+    method: str  # one of: baseline, ft_lbN, ft_lbN_noaug, lora, lora_lbN
     last_blocks: Optional[int]
     wsa: bool
     wsa_window: Optional[int] = None
     layer_index: Optional[int] = None
     augmented: Optional[bool] = None  # None for baseline; True/False for trained methods
+    lora_last_blocks: Optional[int] = None  # set for lora_lbN methods
 
 
 _RUN_NAME_RE = re.compile(
@@ -81,6 +85,10 @@ def parse_run_name(name: str) -> Optional[RunInfo]:
         return RunInfo(name, bb, "baseline", None, wsa)
     if rest == "lora":
         return RunInfo(name, bb, "lora", None, wsa, augmented=True)
+    m_lora_lb = re.match(r"^lora_lb(\d+)$", rest)
+    if m_lora_lb:
+        n = int(m_lora_lb.group(1))
+        return RunInfo(name, bb, f"lora_lb{n}", None, wsa, augmented=True, lora_last_blocks=n)
     m2 = re.match(r"^ft_lb(\d+)$", rest)
     if m2:
         n = int(m2.group(1))
@@ -145,6 +153,7 @@ def build_master_table(pck_data: Dict[str, Any]) -> "Any":
             "last_blocks": info.last_blocks,
             "wsa": info.wsa,
             "augmented": info.augmented,
+            "lora_last_blocks": info.lora_last_blocks,
         }
         row.update({k: v for k, v in (r.get("metrics") or {}).items()
                     if isinstance(v, (int, float))})
@@ -389,6 +398,10 @@ def estimate_trainable_params(
     ckpt_dir = Path(ckpt_dir)
     if method == "lora":
         path = ckpt_dir / f"{backbone}_lora_r{rank}_best.pt"
+    elif re.match(r"^lora_lb(\d+)$", method):
+        m_lb = re.match(r"^lora_lb(\d+)$", method)
+        n_lb = int(m_lb.group(1)) if m_lb else rank
+        path = ckpt_dir / f"{backbone}_lora_r{rank}_lb{n_lb}_best.pt"
     elif method.startswith("ft_lb") and last_blocks is not None:
         path = ckpt_dir / f"{backbone}_lastblocks{last_blocks}_best.pt"
     else:
@@ -405,7 +418,7 @@ def estimate_trainable_params(
     state = blob.get("model") if isinstance(blob, dict) else None
     if not isinstance(state, dict):
         return None
-    if method == "lora":
+    if method == "lora" or method.startswith("lora_lb"):
         return sum(int(v.numel()) for k, v in state.items() if "lora_" in k and hasattr(v, "numel"))
     last_blocks = int(last_blocks) if last_blocks is not None else 0
     block_keys = [k for k in state.keys() if ".blocks." in k]
@@ -742,6 +755,48 @@ def plot_dino_layer_sensitivity(
 
 
 # ---------------------------------------------------------------------------
+# Plot: LoRA last-blocks depth sweep
+# ---------------------------------------------------------------------------
+
+
+def plot_lora_depth(
+    df_master: "Any", out_path: Path, *, alphas: Sequence[float] = PCK_ALPHAS_DEFAULT
+) -> Tuple[Path, Path]:
+    """PCK vs unfrozen LoRA blocks for each backbone (analogous to plot_ft_depth)."""
+    import matplotlib.pyplot as plt
+
+    apply_paper_style()
+    df = df_master[
+        (df_master["method"].str.startswith("lora_lb"))
+        & (~df_master["wsa"])
+        & (df_master["lora_last_blocks"].notna())
+    ].copy()
+    if df.empty:
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.text(0.5, 0.5, "No LoRA depth-sweep runs", ha="center", va="center",
+                transform=ax.transAxes)
+        return save_figure_dual(fig, out_path)
+
+    backbones = [bb for bb in BACKBONES_ORDER if bb in set(df["backbone"])]
+    fig, axes = plt.subplots(1, len(backbones), figsize=(5 * len(backbones), 4), squeeze=False)
+    for i, bb in enumerate(backbones):
+        ax = axes[0, i]
+        sub = df[df["backbone"] == bb].sort_values("lora_last_blocks")
+        for a in alphas:
+            col = f"pck@{a:g}"
+            if col in sub.columns:
+                ax.plot(sub["lora_last_blocks"], sub[col], marker="o", label=col)
+        ax.set_xlabel("Unfrozen LoRA blocks")
+        ax.set_ylabel("PCK (image macro)")
+        ax.set_title(bb)
+        ax.set_xticks(sorted(sub["lora_last_blocks"].dropna().unique().astype(int)))
+        ax.legend(fontsize=8)
+    fig.suptitle("LoRA depth sweep (no WSA)")
+    fig.tight_layout()
+    return save_figure_dual(fig, out_path)
+
+
+# ---------------------------------------------------------------------------
 # Plot: augmentation ablation
 # ---------------------------------------------------------------------------
 
@@ -830,6 +885,7 @@ __all__ = [
     "plot_aug_ablation",
     "plot_dino_layer_sensitivity",
     "plot_ft_depth",
+    "plot_lora_depth",
     "plot_lora_vs_ft",
     "plot_per_category_heatmap",
     "plot_per_difficulty_bars",

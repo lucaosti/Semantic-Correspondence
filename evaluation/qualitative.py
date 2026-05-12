@@ -36,14 +36,20 @@ class MethodSpec:
 
 def resolve_checkpoint_path(spec: MethodSpec, ckpt_dir: Path, *, lora_rank: int = 8) -> Optional[Path]:
     """Map a :class:`MethodSpec` to an on-disk checkpoint file (``None`` for baseline)."""
+    import re as _re
     ckpt_dir = Path(ckpt_dir)
     if spec.method == "baseline":
         return None
     if spec.method == "lora":
         path = ckpt_dir / f"{spec.backbone}_lora_r{lora_rank}_best.pt"
+    elif _re.match(r"^lora_lb(\d+)$", spec.method):
+        m = _re.match(r"^lora_lb(\d+)$", spec.method)
+        n = m.group(1) if m else "2"
+        path = ckpt_dir / f"{spec.backbone}_lora_r{lora_rank}_lb{n}_best.pt"
     elif spec.method.startswith("ft_lb"):
-        n = spec.method.replace("ft_lb", "")
-        path = ckpt_dir / f"{spec.backbone}_lastblocks{n}_best.pt"
+        raw = spec.method.replace("ft_lb", "").replace("_noaug", "")
+        suffix = "_noaug" if "_noaug" in spec.method else ""
+        path = ckpt_dir / f"{spec.backbone}_lastblocks{raw}{suffix}_best.pt"
     else:
         return None
     return path if path.is_file() else None
