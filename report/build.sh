@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEX_DIR="$SCRIPT_DIR/tex"
-PDF_OUT="$SCRIPT_DIR/main.pdf"
+PDF_OUT="$SCRIPT_DIR/report.pdf"
 PDFLATEX="${PDFLATEX:-/Library/TeX/texbin/pdflatex}"
 BIBTEX="${BIBTEX:-/Library/TeX/texbin/bibtex}"
 
