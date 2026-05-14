@@ -149,18 +149,20 @@ def _make_dinov3_vit(
     return model
 
 
-def dinov3_vitb16(
+def _dinov3_common_kwargs(
     *,
-    pretrained: bool = True,
-    weights: Union[Weights, str] = Weights.LVD1689M,
-    check_hash: bool = False,
-    **kwargs,
-):
-    """DINOv3 ViT-B/16 (LVD-1689M or local / URL weights)."""
-    if "hash" not in kwargs:
-        kwargs["hash"] = "73cec8be"
-    kwargs["version"] = None
-    return _make_dinov3_vit(
+    compact_arch_name: str,
+    embed_dim: int,
+    depth: int,
+    num_heads: int,
+    hash: Optional[str],
+    pretrained: bool,
+    weights: Union[Weights, str],
+    check_hash: bool,
+    **extra,
+) -> dict:
+    """Shared keyword arguments for all DINOv3 ViT size variants."""
+    return dict(
         img_size=224,
         patch_size=16,
         in_chans=3,
@@ -168,9 +170,9 @@ def dinov3_vitb16(
         pos_embed_rope_normalize_coords="separate",
         pos_embed_rope_rescale_coords=2,
         pos_embed_rope_dtype="fp32",
-        embed_dim=768,
-        depth=12,
-        num_heads=12,
+        embed_dim=embed_dim,
+        depth=depth,
+        num_heads=num_heads,
         ffn_ratio=4,
         qkv_bias=True,
         drop_path_rate=0.0,
@@ -183,10 +185,99 @@ def dinov3_vitb16(
         mask_k_bias=True,
         pretrained=pretrained,
         weights=weights,
-        compact_arch_name="vitb",
+        compact_arch_name=compact_arch_name,
         check_hash=check_hash,
-        **kwargs,
+        hash=hash,
+        version=None,
+        **extra,
     )
 
 
-__all__ = ["Weights", "dinov3_vitb16", "DINOV3_BASE_URL", "convert_path_or_url_to_url"]
+def dinov3_vits16(
+    *,
+    pretrained: bool = True,
+    weights: Union[Weights, str] = Weights.LVD1689M,
+    check_hash: bool = False,
+    **kwargs,
+):
+    """DINOv3 ViT-S/16 (LVD-1689M or local / URL weights).
+
+    Set env var ``DINOV3_VITS16_WEIGHTS_URL`` to override the download URL
+    if the auto-constructed URL is unavailable.
+    """
+    url_override = os.environ.get("DINOV3_VITS16_WEIGHTS_URL", "").strip()
+    if url_override and isinstance(weights, Weights):
+        weights = url_override
+    kw = _dinov3_common_kwargs(
+        compact_arch_name="vits",
+        embed_dim=384,
+        depth=12,
+        num_heads=6,
+        hash=kwargs.pop("hash", None),
+        pretrained=pretrained,
+        weights=weights,
+        check_hash=check_hash,
+        **kwargs,
+    )
+    return _make_dinov3_vit(**kw)
+
+
+def dinov3_vitb16(
+    *,
+    pretrained: bool = True,
+    weights: Union[Weights, str] = Weights.LVD1689M,
+    check_hash: bool = False,
+    **kwargs,
+):
+    """DINOv3 ViT-B/16 (LVD-1689M or local / URL weights)."""
+    kw = _dinov3_common_kwargs(
+        compact_arch_name="vitb",
+        embed_dim=768,
+        depth=12,
+        num_heads=12,
+        hash=kwargs.pop("hash", "73cec8be"),
+        pretrained=pretrained,
+        weights=weights,
+        check_hash=check_hash,
+        **kwargs,
+    )
+    return _make_dinov3_vit(**kw)
+
+
+def dinov3_vitl16(
+    *,
+    pretrained: bool = True,
+    weights: Union[Weights, str] = Weights.LVD1689M,
+    check_hash: bool = False,
+    **kwargs,
+):
+    """DINOv3 ViT-L/16 (LVD-1689M or local / URL weights).
+
+    Set env var ``DINOV3_VITL16_WEIGHTS_URL`` to override the download URL
+    if the auto-constructed URL is unavailable.
+    """
+    url_override = os.environ.get("DINOV3_VITL16_WEIGHTS_URL", "").strip()
+    if url_override and isinstance(weights, Weights):
+        weights = url_override
+    kw = _dinov3_common_kwargs(
+        compact_arch_name="vitl",
+        embed_dim=1024,
+        depth=24,
+        num_heads=16,
+        hash=kwargs.pop("hash", None),
+        pretrained=pretrained,
+        weights=weights,
+        check_hash=check_hash,
+        **kwargs,
+    )
+    return _make_dinov3_vit(**kw)
+
+
+__all__ = [
+    "Weights",
+    "DINOV3_BASE_URL",
+    "convert_path_or_url_to_url",
+    "dinov3_vits16",
+    "dinov3_vitb16",
+    "dinov3_vitl16",
+]

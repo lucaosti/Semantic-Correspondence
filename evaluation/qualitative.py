@@ -36,14 +36,20 @@ class MethodSpec:
 
 def resolve_checkpoint_path(spec: MethodSpec, ckpt_dir: Path, *, lora_rank: int = 8) -> Optional[Path]:
     """Map a :class:`MethodSpec` to an on-disk checkpoint file (``None`` for baseline)."""
+    import re as _re
     ckpt_dir = Path(ckpt_dir)
     if spec.method == "baseline":
         return None
     if spec.method == "lora":
         path = ckpt_dir / f"{spec.backbone}_lora_r{lora_rank}_best.pt"
+    elif _re.match(r"^lora_lb(\d+)$", spec.method):
+        m = _re.match(r"^lora_lb(\d+)$", spec.method)
+        n = m.group(1) if m else "2"
+        path = ckpt_dir / f"{spec.backbone}_lora_r{lora_rank}_lb{n}_best.pt"
     elif spec.method.startswith("ft_lb"):
-        n = spec.method.replace("ft_lb", "")
-        path = ckpt_dir / f"{spec.backbone}_lastblocks{n}_best.pt"
+        raw = spec.method.replace("ft_lb", "").replace("_noaug", "")
+        suffix = "_noaug" if "_noaug" in spec.method else ""
+        path = ckpt_dir / f"{spec.backbone}_lastblocks{raw}{suffix}_best.pt"
     else:
         return None
     return path if path.is_file() else None
@@ -169,12 +175,7 @@ def load_method_extractors(
         try:
             cfg = DenseExtractorConfig(
                 name=BackboneName(spec.backbone),
-                dinov2_weights_path=pretrained_paths.get("dinov2_vitb14")
-                if spec.backbone == "dinov2_vitb14" else None,
-                dinov3_weights_path=pretrained_paths.get("dinov3_vitb16")
-                if spec.backbone == "dinov3_vitb16" else None,
-                sam_checkpoint_path=pretrained_paths.get("sam_vit_b")
-                if spec.backbone == "sam_vit_b" else None,
+                weights_path=pretrained_paths.get(spec.backbone),
             )
             extractor = DenseFeatureExtractor(cfg, freeze=True)
             if spec.method == "lora":
@@ -298,6 +299,12 @@ def render_method_comparison_grid(
     src_kps = sample["src_kps"].cpu().numpy()
     gt_kps = sample["tgt_kps"].cpu().numpy()
 
+    # Keypoint names — handle single-sample (list of str) and batched (list of lists).
+    _raw_names = sample.get("src_kp_names") or []
+    if _raw_names and isinstance(_raw_names[0], list):
+        _raw_names = _raw_names[0]
+    kp_names: List[str] = list(_raw_names) if _raw_names else []
+
     for row, (label, extractor) in enumerate(extractors.items()):
         wsa = use_wsa_per_label.get(label, False)
         result = predict_pair(
@@ -309,6 +316,17 @@ def render_method_comparison_grid(
         dist = np.linalg.norm(pred - gt_kps, axis=-1)
         correct = (dist <= alpha * pck_thr) & valid
 
+        ambiguous_set: set = set()
+        if kp_names:
+            _named = [(kp_names[i] if i < len(kp_names) else "", float(src_kps[i, 0]), float(src_kps[i, 1])) for i in range(len(src_kps))]
+            ambiguous_set = set(find_symmetry_ambiguity(
+                src_kps_named=_named,
+                pred_kps_xy=[(float(pred[i, 0]), float(pred[i, 1])) for i in range(len(pred))],
+                gt_kps_xy=[(float(gt_kps[i, 0]), float(gt_kps[i, 1])) for i in range(len(gt_kps))],
+                pck_threshold=pck_thr,
+                alpha=alpha,
+            ))
+
         ax_s, ax_t = axes[row, 0], axes[row, 1]
         ax_s.imshow(src_np)
         ax_s.axis("off")
@@ -319,7 +337,12 @@ def render_method_comparison_grid(
         for i in range(len(src_kps)):
             if not valid[i]:
                 continue
-            color = "tab:green" if correct[i] else "tab:red"
+            if correct[i]:
+                color = "tab:green"
+            elif i in ambiguous_set:
+                color = "tab:orange"
+            else:
+                color = "tab:red"
             ax_s.scatter(src_kps[i, 0], src_kps[i, 1], s=40, c=color,
                          edgecolors="white", linewidths=0.5, zorder=5)
             ax_t.scatter(pred[i, 0], pred[i, 1], s=40, c=color, marker="x",
