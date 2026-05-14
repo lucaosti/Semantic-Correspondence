@@ -84,6 +84,9 @@ config.yaml
 !/README.md
 !/documentation.md
 
+# PDFs (coursework, papers — local only)
+*.pdf
+
 # Internal docs (planning, notes, constraints — local only)
 docs/
 
