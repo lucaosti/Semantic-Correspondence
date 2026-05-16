@@ -20,8 +20,7 @@ except ImportError:  # pragma: no cover
     plt = None  # type: ignore[assignment]
     Figure = None  # type: ignore[assignment,misc]
 
-_IMAGENET_MEAN = (0.485, 0.456, 0.406)
-_IMAGENET_STD = (0.229, 0.224, 0.225)
+from models.common.input_norm import IMAGENET_MEAN as _IMAGENET_MEAN, IMAGENET_STD as _IMAGENET_STD
 
 
 def _to_numpy_hwc(

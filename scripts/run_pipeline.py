@@ -48,12 +48,18 @@ RUN_EVAL_WSA_SWEEP: Tuple[bool, bool, bool] = (True, True, True)
 RUN_EVAL_LAYER_SWEEP: Tuple[bool, bool, bool] = (True, True, False)
 RUN_EXPORT_METRICS_TABLES: bool = True
 RUN_PYTEST: bool = True
+# PF-Willow / PF-Pascal cross-dataset evaluation (inference only; skipped gracefully
+# if the dataset directory does not exist).
+RUN_EVAL_PF_WILLOW: Tuple[bool, bool, bool] = (True, True, True)
+RUN_EVAL_PF_PASCAL: Tuple[bool, bool, bool] = (True, True, True)
 
 # =============================================================================
 # SHARED CONFIG
 # =============================================================================
 
 SPAIR_ROOT: Optional[str] = None
+PF_WILLOW_ROOT: Optional[str] = None   # None → auto-resolved via PF_WILLOW_ROOT env / repo default
+PF_PASCAL_ROOT: Optional[str] = None   # None → auto-resolved via PF_PASCAL_ROOT env / repo default
 CHECKPOINT_DIR: str = "checkpoints"
 LAST_BLOCKS_LIST: List[int] = [1, 2, 4]
 LORA_RANK: int = 8
@@ -246,6 +252,10 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["SPAIR_ROOT"] = str(paths["spair_root"])
         if paths.get("checkpoint_dir") is not None:
             g["CHECKPOINT_DIR"] = str(paths["checkpoint_dir"])
+        if paths.get("pf_willow_root") is not None:
+            g["PF_WILLOW_ROOT"] = str(paths["pf_willow_root"])
+        if paths.get("pf_pascal_root") is not None:
+            g["PF_PASCAL_ROOT"] = str(paths["pf_pascal_root"])
 
     runtime = raw.get("runtime") or {}
     if isinstance(runtime, dict):
@@ -389,6 +399,12 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["RUN_EXPORT_METRICS_TABLES"] = bool(toggles["run_export_metrics_tables"])
         if "run_pytest" in toggles:
             g["RUN_PYTEST"] = bool(toggles["run_pytest"])
+        for key, dest in (
+            ("run_eval_pf_willow", "RUN_EVAL_PF_WILLOW"),
+            ("run_eval_pf_pascal", "RUN_EVAL_PF_PASCAL"),
+        ):
+            if key in toggles and toggles[key] is not None:
+                g[dest] = _triplet_bool(dest, toggles[key])
         if "train_finetune_no_aug" in toggles:
             g["TRAIN_FINETUNE_NO_AUG"] = bool(toggles["train_finetune_no_aug"])
         if "train_finetune_size_variants" in toggles:
@@ -476,6 +492,10 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "RUN_EXPORT_METRICS_TABLES": RUN_EXPORT_METRICS_TABLES,
         "RUN_PYTEST": RUN_PYTEST,
         "TRAIN_FINETUNE_NO_AUG": TRAIN_FINETUNE_NO_AUG,
+        "PF_WILLOW_ROOT": PF_WILLOW_ROOT,
+        "PF_PASCAL_ROOT": PF_PASCAL_ROOT,
+        "RUN_EVAL_PF_WILLOW": list(RUN_EVAL_PF_WILLOW),
+        "RUN_EVAL_PF_PASCAL": list(RUN_EVAL_PF_PASCAL),
     }
 
 
@@ -964,6 +984,132 @@ def _run_eval_and_export(
     return 0
 
 
+def _build_pf_eval_specs(
+    cwd: Path,
+    sam_checkpoint: Optional[str],
+    logger: PipelineLogger,
+    *,
+    dataset: str,
+    pf_root: Optional[str],
+    num_workers: int,
+) -> List[Any]:
+    """Build evaluation specs for a PF dataset (baseline + best checkpoints).
+
+    Generates one baseline spec per enabled backbone and one checkpoint spec for
+    the best fine-tuned and LoRA checkpoints (if they exist on disk).
+    """
+    from evaluation.experiment_runner import EvalRunSpec
+
+    specs: List[EvalRunSpec] = []
+    toggle = RUN_EVAL_PF_WILLOW if dataset == "pf_willow" else RUN_EVAL_PF_PASCAL
+
+    for idx, backbone in enumerate(BACKBONE_NAMES):
+        if not toggle[idx]:
+            continue
+        if backbone == "sam_vit_b" and not sam_checkpoint:
+            logger.log_line(
+                f"WARNING: skipping {dataset} eval for {backbone}: SAM_CHECKPOINT not set.",
+                err=True,
+            )
+            continue
+
+        h, w = _resolve_image_hw(backbone)
+        wt = _eval_weights_for_backbone(backbone, effective_sam_vit_b=sam_checkpoint)
+        base_kw: Dict[str, Any] = dict(
+            backbone=backbone,
+            split=EVAL_SPLIT,
+            limit=EVAL_LIMIT,
+            preprocess=PREPROCESS,
+            height=h,
+            width=w,
+            num_workers=num_workers,
+            dataset=dataset,
+            dataset_root=pf_root,
+            **wt,
+        )
+
+        specs.append(EvalRunSpec(name=f"{backbone}_baseline_{dataset}", **base_kw))
+
+        for nb in LAST_BLOCKS_LIST:
+            ck = _resolve_ckpt_path(cwd, _default_finetune_ckpt_for(cwd, backbone, nb))
+            if ck:
+                specs.append(EvalRunSpec(
+                    name=f"{backbone}_ft_lb{nb}_{dataset}", checkpoint=ck, **base_kw
+                ))
+
+        for lora_nb in LORA_LAST_BLOCKS_LIST:
+            lora_ck = _resolve_ckpt_path(cwd, _default_lora_ckpt(cwd, backbone, lora_nb))
+            if lora_ck:
+                specs.append(EvalRunSpec(
+                    name=f"{backbone}_lora_lb{lora_nb}_{dataset}", checkpoint=lora_ck, **base_kw
+                ))
+
+    return specs
+
+
+def _run_pf_eval_and_export(
+    cwd: Path,
+    sam_checkpoint: Optional[str],
+    logger: PipelineLogger,
+    *,
+    dataset: str,
+    pf_root: Optional[str],
+    num_workers: int,
+    device_str: str,
+) -> int:
+    """Run PCK evaluation for one PF dataset and export results to JSON."""
+    import torch
+    from evaluation.experiment_runner import run_spair_pck_eval
+
+    from data.paths import resolve_pf_pascal_root, resolve_pf_willow_root
+
+    if dataset == "pf_willow":
+        resolved_root = resolve_pf_willow_root(pf_root)
+    else:
+        resolved_root = resolve_pf_pascal_root(pf_root)
+
+    # Skip gracefully if the dataset directory does not exist.
+    ann_check = (
+        "test_pairs_pf.csv" if dataset == "pf_willow" else os.path.join("annotations", "test_pairs.csv")
+    )
+    if not os.path.isfile(os.path.join(resolved_root, ann_check)):
+        logger.log_line(
+            f"WARNING: {dataset} dataset not found at {resolved_root} — skipping eval.\n"
+            "  Run python scripts/download_pf_datasets.py to acquire the dataset.",
+            err=True,
+        )
+        return 0
+
+    device = torch.device(device_str)
+    specs = _build_pf_eval_specs(
+        cwd, sam_checkpoint, logger,
+        dataset=dataset, pf_root=pf_root, num_workers=num_workers,
+    )
+    if not specs:
+        logger.log_line(f"No specs generated for {dataset}.")
+        return 0
+
+    logger.log_line(f"-- eval dataset={dataset} ({len(specs)} specs)")
+    results = [
+        run_spair_pck_eval(s, alphas=EVAL_ALPHAS, device=device)
+        for s in specs
+    ]
+    for r in results:
+        logger.log_line(f"--- {r['name']} --- {r['metrics']}")
+
+    if RUN_EXPORT_METRICS_TABLES:
+        out_dir = cwd / "runs" / "pipeline_exports"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        result_path = out_dir / f"pck_results_{dataset}.json"
+        import json as _json  # noqa: PLC0415
+
+        with open(result_path, "w", encoding="utf-8") as f:
+            _json.dump(results, f, indent=2)
+        logger.log_line(f"Wrote {result_path}.")
+
+    return 0
+
+
 def _sam_slot_used() -> bool:
     return any(
         t[2] for t in (
@@ -1366,6 +1512,31 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             if PIPELINE_RESUME:
                 _ps.mark_step_done(cwd, state, ev_sid)
             _trace_stage(cwd, logger, "done", ev_sid, exit_code=0)
+
+    for _pf_dataset, _pf_root, _pf_toggle, _pf_sid in (
+        ("pf_willow", PF_WILLOW_ROOT, RUN_EVAL_PF_WILLOW, "eval_pf_willow"),
+        ("pf_pascal", PF_PASCAL_ROOT, RUN_EVAL_PF_PASCAL, "eval_pf_pascal"),
+    ):
+        if not any(_pf_toggle):
+            continue
+        if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), _pf_sid):
+            logger.log_line(f"[SKIP] stage_id={_pf_sid}")
+            _trace_stage(cwd, logger, "skip", _pf_sid, reason="already_completed")
+        else:
+            _trace_stage(cwd, logger, "start", _pf_sid)
+            rc = _run_pf_eval_and_export(
+                cwd, effective_sam, logger,
+                dataset=_pf_dataset,
+                pf_root=_pf_root,
+                num_workers=eff_workers,
+                device_str=eff_device,
+            )
+            if rc != 0:
+                _trace_stage(cwd, logger, "fail", _pf_sid, exit_code=rc)
+                return rc
+            if PIPELINE_RESUME:
+                _ps.mark_step_done(cwd, state, _pf_sid)
+            _trace_stage(cwd, logger, "done", _pf_sid, exit_code=0)
 
     if RUN_PYTEST:
         py_sid = "pytest"

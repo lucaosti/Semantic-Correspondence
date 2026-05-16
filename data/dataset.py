@@ -31,6 +31,8 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from torchvision.transforms import functional as TF
 
+from models.common.input_norm import IMAGENET_MEAN, IMAGENET_STD
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -275,9 +277,7 @@ def preprocess_pair_images_and_keypoints(
 
 def build_imagenet_normalize() -> transforms.Normalize:
     """Build ImageNet normalization (torchvision convention)."""
-    mean = (0.485, 0.456, 0.406)
-    std = (0.229, 0.224, 0.225)
-    return transforms.Normalize(mean=mean, std=std)
+    return transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
 
 
 def build_photometric_pair_transform(
