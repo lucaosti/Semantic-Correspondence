@@ -43,13 +43,13 @@ Weights are **not** committed to git. Use `scripts/download_pretrained_weights.p
 
 | Path | Responsibility |
 |------|----------------|
-| `data/` | `SPair71kPairDataset`, `spair_collate_fn`, preprocessing, `data/paths.resolve_spair_root` |
+| `data/` | `SPair71kPairDataset`, `PFWillowPairDataset`, `PFPascalPairDataset`, `spair_collate_fn`, preprocessing, path resolvers |
 | `models/common/` | Matching, coords, LoRA, window soft-argmax, `vit_intermediate`, input norm |
 | `models/dinov2/`, `dinov3/`, `sam/` | Backbone implementations; weight loading in `hub_loader.py` / `backbone.py`. `models/dinov2/layers/` and `models/sam/modeling/` are vendored upstream code (Meta); upstream comments/FIXMEs are not first-party concerns. |
 | `training/` | `losses.py`, `engine.py` (batched Gaussian losses), `unfreeze.py`, `early_stopping.py`, `config.py` |
 | `evaluation/` | `experiment_runner.py` (in-house batched PCK runner, also drives the WSA-window and DINO layer-index inference-only ablations), `figures.py` (paper-grade tables/plots: master / per-category / per-difficulty / efficiency tables, training curves, WSA / depth / LoRA-vs-FT plots, WSA-window and DINO-layer sensitivity sweeps), `qualitative.py` (method grids, similarity heatmaps in `viridis`, find-symmetry-ambiguity helper), `visualize.py`, checkpoint helpers |
 | `utils/` | `hardware.py`, `pipeline_state.py`, `paths.py` |
-| `scripts/` | `run_pipeline.py` (orchestrator), `train.py` (unified `--mode finetune|lora`), `verify_dataset.py`, `download_pretrained_weights.py` |
+| `scripts/` | `run_pipeline.py` (orchestrator), `train.py` (unified `--mode finetune|lora`), `verify_dataset.py`, `download_pretrained_weights.py`, `download_pf_datasets.py` |
 | `runs/`, `checkpoints/` | Gitignored artifacts: logs, exports, downloaded weights, training checkpoints |
 
 **Root:** `AML_Local.ipynb` (local training/orchestration), `AML_Colab.ipynb` (Colab training/orchestration), `AML_Analysis.ipynb` (paper-grade analysis only), `README.md`, `requirements.txt`, `pyproject.toml`, `documentation.md`.
@@ -63,7 +63,7 @@ Weights are **not** committed to git. Use `scripts/download_pretrained_weights.p
 - **Extras:** `pip install -e ".[dev]"` (pytest, ruff), `".[notebook]"` (jupyter, ipykernel, pandas).
 - **PyTorch:** Install a wheel matching your hardware; verify CUDA with `torch.cuda.is_available()` and `torch.cuda.get_device_capability(0)` where relevant (`requirements.txt` notes for legacy NVIDIA GPUs).
 
-**Data:** Place SPair-71k under `data/SPair-71k/` or set **`SPAIR_ROOT`**. Run `python scripts/verify_dataset.py` before training.
+**Data:** Place SPair-71k under `data/SPair-71k/` or set **`SPAIR_ROOT`**. Run `python scripts/verify_dataset.py` before training. For cross-dataset evaluation, run `python scripts/download_pf_datasets.py` (see §4.4).
 
 ---
 
@@ -89,6 +89,63 @@ Implementation notes: `data/dataset.py`.
 ### 4.3 Batching
 
 `spair_collate_fn` stacks tensor fields; `pair_id_str`, `category`, and `src_kp_names` are kept as nested `list[str]` of length **B**. `src_kp_names` contains per-keypoint semantic labels (e.g. `"left_eye"`) extracted from the SPair-71k annotation JSON; invalid/missing slots are empty strings. Keypoints are padded to **`MAX_KEYPOINTS`** (20); invalid slots use **`INVALID_KP_COORD`** (`-2.0`). Training steps use **B pairs** per optimizer step when `--batch-size` is B.
+
+---
+
+### 4.4 Cross-dataset evaluation: PF-Willow and PF-Pascal
+
+The pipeline evaluates trained models on two additional community benchmarks in
+addition to SPair-71k.  Both are **test-only benchmarks** (no training on them).
+
+| Dataset | Categories | Pairs | PCK normalisation |
+|---------|-----------|-------|-------------------|
+| **PF-Willow** (Ham et al., CVPR 2016) | 10 sub-categories | ~900 | Image-size: `alpha × max(out_H, out_W)` |
+| **PF-Pascal** (Ham et al., ECCV 2016) | 20 Pascal VOC classes | ~1300 | Bounding-box: `alpha × max(bbox_W, bbox_H)` |
+
+**Dataset classes:** `data.pf_dataset.PFWillowPairDataset` and `PFPascalPairDataset`.
+Both implement the same `__getitem__` schema as `SPair71kPairDataset` and are
+compatible with `spair_collate_fn` and `evaluation.experiment_runner.run_spair_pck_eval`.
+
+**PCK normalisation detail:**
+
+* PF-Willow uses image-size normalisation: `pck_threshold_bbox` is set to
+  `max(out_H, out_W)` — a constant for all images under fixed-resize preprocessing.
+* PF-Pascal uses bbox normalisation identical to SPair-71k.
+* No difficulty-flag annotations exist in either dataset; all difficulty tensors are
+  set to zero.
+
+**Path resolution (env vars, descending priority):**
+
+| Dataset | Env var | Fallback |
+|---------|---------|---------|
+| PF-Willow | `PF_WILLOW_ROOT` | `DATASET_ROOT/PF-Willow` → `<repo>/data/PF-Willow` |
+| PF-Pascal | `PF_PASCAL_ROOT` | `DATASET_ROOT/PF-Pascal` → `<repo>/data/PF-Pascal` |
+
+**Setup:**
+
+```bash
+python scripts/download_pf_datasets.py            # both datasets
+python scripts/download_pf_datasets.py --datasets pf_willow   # only PF-Willow
+```
+
+PF-Willow is downloaded from the official WILLOW release and converted from MATLAB
+format to CSV (requires `scipy`).  PF-Pascal annotation CSVs are fetched from the
+CATs repository; Pascal VOC 2011 JPEG images must be placed manually (the script
+prints instructions).
+
+**Pipeline toggles (in `run_pipeline.py`):**
+
+```python
+RUN_EVAL_PF_WILLOW: Tuple[bool, bool, bool] = (True, True, True)  # (DINOv2, DINOv3, SAM)
+RUN_EVAL_PF_PASCAL: Tuple[bool, bool, bool] = (True, True, True)
+PF_WILLOW_ROOT: Optional[str] = None   # explicit path override
+PF_PASCAL_ROOT: Optional[str] = None
+```
+
+The pipeline skips a PF stage gracefully (with a warning) if the dataset directory
+or its annotation CSV is not present.  Evaluation results are exported to
+`runs/pipeline_exports/pck_results_pf_willow.json` and
+`runs/pipeline_exports/pck_results_pf_pascal.json`.
 
 ---
 
