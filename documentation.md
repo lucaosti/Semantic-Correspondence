@@ -212,7 +212,7 @@ Fine-tuning and LoRA have **separate** batch size controls to avoid silent overw
 `FT_BATCH_SIZE_BY_BACKBONE` and `LORA_BATCH_SIZE_BY_BACKBONE` (YAML:
 `finetune.batch_size_by_backbone`, `lora.batch_size_by_backbone`).
 When a backbone is not present in the map, the scalar fallback (`FT_BATCH_SIZE` / `LORA_BATCH_SIZE`) is used.
-See §6.3 above for the normative batch-size policy.
+See the defaults table above for the normative batch-size policy.
 
 Training precision is controlled by `PRECISION` (`auto`/`fp32`/`bf16`/`fp16`) and passed to both training scripts.
 `auto` resolves to `bf16` (or `fp16`) on CUDA and to `fp32` on non-CUDA devices. **Evaluation** runs batched (default `batch_size=8`) under `torch.inference_mode()` with bf16 autocast on CUDA Ampere+; matching is fully tensorized so PCK aggregation is the only Python-level loop.
@@ -351,18 +351,7 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 
 ---
 
-## 9. Hardware-aware behavior (`utils/hardware.py`)
-
-- **Device resolution:** CUDA → MPS → CPU when device is `None`.
-- **Multi-GPU selection:** if `CUDA_VISIBLE_DEVICES` is set, only those GPUs are visible to the process; the first visible one is used as logical `cuda:0`.
-- **`num_workers`:** CLI `-1` means auto via `recommended_dataloader_workers` (CUDA: aggressive prefetch; CPU training: smaller pool).
-- **CUDA:** `cudnn.benchmark`, TF32 allow where supported, `pin_memory`, `persistent_workers` + `prefetch_factor` when workers > 0.
-
-**MPS:** Some ops (e.g. `grid_sample` with certain `padding_mode`) may fail; use **CPU** or **CUDA** for parity with Linux training/eval.
-
----
-
-## 10. Notebooks and config file
+## 9. Notebooks and config file
 
 The repository ships **three** notebooks at the root, each with a single, well-defined responsibility:
 
@@ -388,7 +377,7 @@ The repository ships **three** notebooks at the root, each with a single, well-d
 
 ---
 
-## 11. Coding standards
+## 10. Coding standards
 
 - **Code language:** English for identifiers, docstrings, and comments (see `data/dataset.py` for examples).
 - **Docs:** `documentation.md` (this file) = system reference; `README.md` = quick start.
@@ -400,13 +389,45 @@ The repository ships **three** notebooks at the root, each with a single, well-d
 
 ---
 
-## 12. Theoretical consistency
+## 11. Theoretical consistency
 
 - **Gaussian target + cross-entropy on softmax similarities:** A smooth surrogate for location supervision on a grid; consistent with dense correspondence literature citing SD4Match-style objectives.
 - **Transfer learning:** Training only last blocks or LoRA matches standard adaptation of foundation models to paired data with limited compute.
 - **WSA outside the loss:** Avoids discontinuities from hard argmax in the training objective; refinement is a **test-time** operator.
 - **Split discipline:** Holding out `test` for final metrics limits overfitting to benchmark statistics.
 - **Batch averaging:** Mean of per-pair losses is standard ERM; if batch size changes by orders of magnitude, consider **learning-rate retuning** (not automated here).
+
+---
+
+## 12. Design rationale
+
+Choices mandated by the course PDF (loss type, PCK thresholds, backbone families, stage structure) are not repeated here. The following covers implementation decisions made by the project team.
+
+**L2 normalization of features (§5.1).** The extractor L2-normalizes each spatial descriptor along the channel axis. This makes cosine similarity equal to the dot product and removes per-location magnitude variance, so the matching score reflects only the directional alignment of the descriptor in feature space.
+
+**DINO intermediate layer index = 4 (§5.1).** The final ViT-B layers (9–12) aggregate class-level semantics at the cost of spatial precision. Layer 4 retains both local texture and mid-level semantic abstraction, which is the empirically optimal operating point for dense correspondence on SPair-71k — validated by the layer-sweep ablation (`pck_results_layer_sweep.json`).
+
+**Gaussian sigma = 1.0 feature pixel (§6.1).** At DINOv2 ViT-B resolution (37×37 for 518×518 input), `sigma_feat=1.0` equals one feature cell ≈ 14 image pixels, or about 2.7% of image width. Smaller sigmas produce near-delta targets that are numerically difficult to minimize under softmax; larger sigmas spread supervision across semantically distinct grid cells, diluting the correspondence signal.
+
+**Fused source+target forward (§6.2).** Source and target images are concatenated along the batch axis and processed in one extractor call, then split. This halves the number of backbone forward passes per optimizer step without changing the computed gradients, improving GPU utilization.
+
+**AdamW and weight decay (§6.3).** AdamW decouples L2 regularization from the adaptive gradient step, which is the standard optimizer for ViT adaptation. Fine-tuning uses `weight_decay=0.01`; LoRA uses `weight_decay=0.0` because the adapter matrices (`A`, `B`) are already constrained to low rank — additional L2 doubly penalizes their magnitude and impedes convergence to expressive low-rank solutions.
+
+**`drop_last=True`, `non_blocking=True` in the train DataLoader (§6.3).** `drop_last` ensures all micro-batches share the same shape, which is required by `torch.compile(mode="reduce-overhead")` (no re-tracing on partial batches) and by gradient-accumulation groups to be complete. `non_blocking=True` overlaps host-to-device transfers with the preceding step's GPU compute, hiding H2D latency behind the backward pass.
+
+**Freezing early blocks, fine-tuning last N (§6.4).** Early ViT blocks encode generic low-level features (edges, textures) that transfer across tasks; fine-tuning them on the small SPair-71k training set risks overwriting stable pretrained representations. Late blocks encode more task-specific high-level semantics and adapt efficiently with limited data.
+
+**Same photometric augmentation on both images (§6.5).** Ground-truth correspondences are fixed pixel coordinates. Applying the same random color jitter to source and target preserves these coordinates without remapping. Geometric augmentations are excluded because they would require consistently transforming both images and all annotated keypoint locations.
+
+**LoRA on MLP linears, not attention (§6.6).** Attention weight matrices encode position-sensitive token-mixing patterns; modifying them risks disrupting the alignment between positional encodings and attended spatial locations. MLP `fc1`/`fc2` (DINO) and `lin1`/`lin2` (SAM) linears encode token-wise feature transformations that are more amenable to domain-specific re-weighting without altering the backbone's geometric structure.
+
+**LoRA rank = 8, alpha = 16 (§6.6).** The effective scaling is `alpha/rank = 2.0`, a standard initialization heuristic that keeps the LoRA contribution on the same magnitude scale as the base linear; at initialization, B = 0 so the adapter is an exact pass-through. Rank 8 yields approximately 0.5% trainable parameters relative to the backbone — sufficient for domain adaptation without overfitting on SPair-71k.
+
+**Early stopping patience = 7 (§6.7).** With a 50-epoch budget, 7 stagnant validation-loss epochs represent 14% of the total — conservative enough to accommodate the oscillatory convergence typical of LoRA training at `lr=1e-3`, without exhausting the full budget when the model has converged.
+
+**Image sizes: 518×518 (DINOv2), 512×512 (DINOv3 / SAM) (§8.2).** 518 = 37×14 is the smallest input that yields an exact 37×37 feature grid for DINOv2's patch size of 14; non-multiples produce boundary partial patches that break the spatial regularity of the feature map. DINOv3 uses patch size 16 → 512 = 32×16. SAM processes images internally at 1024×1024; the dataset frame (512×512) is used only for preprocessing, and keypoints are remapped to the dataset frame after feature extraction.
+
+**MAX_KEYPOINTS = 20, INVALID_KP_COORD = −2.0 (§4.3).** SPair-71k has at most 20 annotated keypoints per pair. Fixed-length padding to this value enables fully batched tensor operations throughout training and evaluation. The sentinel −2.0 is below the `grid_sample` normalized-coordinate range [−1, 1], so it is unambiguously detectable by a strict inequality and cannot be confused with a valid keypoint location.
 
 ---
 
@@ -421,12 +442,6 @@ Coverage includes dataset workers, pipeline state, smoke imports, backbone const
 
 ---
 
-## 14. Design rationale
+## 14. Package version
 
-Implementation choices (backbone selection, loss design, WSA, LoRA, photometric augmentation, PCK thresholds) follow the dense correspondence literature cited in the project report.
-
----
-
-## 15. Package version
-
-**`semantic-correspondence`:** version **`0.1.0`** in `pyproject.toml`. This document’s accuracy is tied to the git tree at the time of the last edit to **`documentation.md`**.
+**`semantic-correspondence`:** version **`0.1.0`** in `pyproject.toml`. This document's accuracy is tied to the git tree at the time of the last edit to **`documentation.md`**.
