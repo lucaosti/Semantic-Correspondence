@@ -113,6 +113,11 @@ LORA_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {
     "dinov2_vitl14": 14,
     "dinov3_vitl16": 14,
 }
+EVAL_BATCH_SIZE: int = 8
+EVAL_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {
+    "sam_vit_b": 1,  # OOM at bs=8 during inference (no gradients, but SAM encoder is large)
+    "sam_vit_l": 1,
+}
 RESUME_SAVE_INTERVAL: int = 50
 LOG_BATCH_INTERVAL: int = 50
 DINO_LAYER_INDICES: int = 4
@@ -364,7 +369,11 @@ def _apply_pipeline_yaml(path: Path) -> None:
         if lora.get("batch_size") is not None:
             g["LORA_BATCH_SIZE"] = int(lora["batch_size"])
         if lora.get("last_blocks") is not None:
-            g["LORA_LAST_BLOCKS"] = int(lora["last_blocks"])
+            _lb = lora["last_blocks"]
+            if isinstance(_lb, (list, tuple)):
+                g["LORA_LAST_BLOCKS_LIST"] = [int(x) for x in _lb]
+            else:
+                g["LORA_LAST_BLOCKS"] = int(_lb)
         if lora.get("last_blocks_list") is not None:
             lb_list = lora["last_blocks_list"]
             g["LORA_LAST_BLOCKS_LIST"] = [int(x) for x in (lb_list if isinstance(lb_list, (list, tuple)) else [lb_list])]
@@ -631,6 +640,7 @@ def _build_eval_specs(
     def _base_kwargs(backbone: str) -> Dict[str, Any]:
         h, w = _resolve_image_hw(backbone)
         wt = _eval_weights_for_backbone(backbone, effective_sam_vit_b=sam_checkpoint)
+        bs = EVAL_BATCH_SIZE_BY_BACKBONE.get(backbone, EVAL_BATCH_SIZE)
         return dict(
             backbone=backbone,
             split=EVAL_SPLIT,
@@ -638,6 +648,7 @@ def _build_eval_specs(
             preprocess=PREPROCESS,
             height=h,
             width=w,
+            batch_size=bs,
             num_workers=num_workers,
             **wt,
         )
@@ -942,12 +953,41 @@ def _export_tables(
     logger.log_line("Wrote " + " | ".join(wrote) + ".")
 
 
+def _eval_ckpt_path(cwd: Path, family: str) -> Path:
+    """Return path to the per-spec JSONL checkpoint for *family*."""
+    return cwd / "runs" / "eval_checkpoints" / f"{family}.jsonl"
+
+
+def _load_eval_checkpoint(ckpt_path: Path) -> Dict[str, Any]:
+    """Load already-completed spec results keyed by spec name, or {}."""
+    if not ckpt_path.exists():
+        return {}
+    done: Dict[str, Any] = {}
+    for line in ckpt_path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+            done[r["name"]] = r
+        except Exception:
+            pass
+    return done
+
+
+def _append_eval_checkpoint(ckpt_path: Path, result: Dict[str, Any]) -> None:
+    """Append one spec result to the checkpoint JSONL (atomic line append)."""
+    ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(ckpt_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(result, default=str) + "\n")
+
+
 def _run_eval_and_export(
     cwd: Path, sam_checkpoint: Optional[str], logger: PipelineLogger,
     *, num_workers: int, device_str: str,
 ) -> int:
     import torch
-    from evaluation.experiment_runner import run_comparison_batch
+    from evaluation.experiment_runner import run_spair_pck_eval
 
     device = torch.device(device_str)
 
@@ -970,12 +1010,29 @@ def _run_eval_and_export(
         if not specs:
             continue
         any_specs = True
-        logger.log_line(f"-- eval family={family} ({len(specs)} specs)")
-        results = run_comparison_batch(
-            specs, spair_root=SPAIR_ROOT, alphas=EVAL_ALPHAS, device=device,
+
+        ckpt_path = _eval_ckpt_path(cwd, family)
+        done = _load_eval_checkpoint(ckpt_path)
+        skipped = len(done)
+        logger.log_line(
+            f"-- eval family={family} ({len(specs)} specs"
+            + (f", {skipped} already done — resuming" if skipped else "")
+            + ")"
         )
-        for r in results:
-            logger.log_line(f"--- {r['name']} --- {r['metrics']}")
+
+        results: List[Dict[str, Any]] = list(done.values())
+        for i, spec in enumerate(specs):
+            if spec.name in done:
+                logger.log_line(f"[eval] skip {spec.name} (checkpoint)")
+                continue
+            logger.log_line(f"[eval] {i+1}/{len(specs)} {spec.name}")
+            r = run_spair_pck_eval(
+                spec, spair_root=SPAIR_ROOT, alphas=EVAL_ALPHAS, device=device,
+            )
+            logger.log_line(f"[eval] done {spec.name} — {r['metrics']}")
+            _append_eval_checkpoint(ckpt_path, r)
+            results.append(r)
+
         if RUN_EXPORT_METRICS_TABLES:
             _export_tables(cwd, results, logger, family=family)
 

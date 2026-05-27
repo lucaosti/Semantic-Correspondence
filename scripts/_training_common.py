@@ -273,6 +273,8 @@ def run_gaussian_training_loop(
         # Re-seed the shared generator so ``RandomSampler`` produces a deterministic but
         # epoch-dependent permutation while the DataLoader & its workers are reused.
         shuffle_gen.manual_seed(TRAIN_SHUFFLE_SEED_BASE + epoch)
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
         print(f"epoch {epoch + 1}/{epochs} (train batches: {n_train_batches})", flush=True)
         model.train()
         total_loss = torch.zeros((), device=device)
@@ -344,6 +346,8 @@ def run_gaussian_training_loop(
                 )
         train_loss = (total_loss / max(n_batches, 1)).item()
 
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
         model.eval()
         val_total = torch.zeros((), device=device)
         vn = 0
