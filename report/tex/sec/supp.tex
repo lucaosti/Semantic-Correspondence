@@ -71,9 +71,9 @@ Table~\ref{tab:micro_pck} reports per-keypoint (micro) PCK on the SPair-71k test
 
 Figure~\ref{fig:per_category_supp} shows PCK@0.20 broken down by SPair-71k object category for all configurations. Rigid, texturally distinctive categories (bus, bottle, car, aeroplane) achieve the highest correspondence accuracy. Articulated or texture-poor categories (person, horse, cow) are consistently harder across all backbones and adaptation strategies. The category ranking is stable across methods, confirming that category difficulty is driven primarily by intrinsic shape variability rather than the choice of backbone or adaptation strategy.
 
-\begin{figure}[ht]
+\begin{figure}[!htbp]
     \centering
-    \includegraphics[width=\columnwidth]{img/per_category_a0.pdf}
+    \includegraphics[width=0.78\columnwidth]{img/per_category_a0.pdf}
     \caption{Per-category PCK@0.20 heatmap for all configurations. Rigid categories (bus, bottle, car) achieve higher accuracy; articulated categories (person, horse, cow) are harder across all methods.}
     \label{fig:per_category_supp}
 \end{figure}
