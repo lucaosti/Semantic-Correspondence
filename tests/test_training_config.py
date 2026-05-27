@@ -32,3 +32,28 @@ def test_early_stopping_config():
 def test_train_paths():
     p = TrainPaths(spair_root="/data/SPair-71k")
     assert p.spair_root == "/data/SPair-71k"
+
+
+def test_config_matches_train_argparse_defaults():
+    """Verify training/config.py defaults stay in sync with train.py argparse defaults."""
+    import sys
+    from scripts.train import parse_args
+
+    old_argv = sys.argv
+    sys.argv = ["train.py", "--mode", "finetune"]
+    args = parse_args()
+    sys.argv = old_argv
+
+    ft = FinetuneConfig()
+    es = EarlyStoppingConfig()
+    lora = LoRAConfig()
+
+    assert args.batch_size == ft.batch_size
+    assert args.epochs == ft.max_epochs
+    assert args.last_blocks == ft.last_blocks
+    assert args.weight_decay == ft.weight_decay
+    assert args.layer_indices == ft.dino_layer_indices
+    assert args.patience == es.patience
+    assert abs(args.min_delta - es.min_delta) < 1e-9
+    assert args.rank == lora.rank
+    assert abs(args.alpha - lora.alpha) < 1e-9

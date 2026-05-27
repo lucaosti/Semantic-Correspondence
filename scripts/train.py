@@ -193,7 +193,7 @@ def main() -> int:
         lr = args.lr if args.lr is not None else 1e-3
         opt = torch.optim.AdamW(lora_params, lr=lr, weight_decay=0.0, fused=fused_opt)
 
-        tag = f"{args.backbone}_lora_r{args.rank}"
+        tag = f"{args.backbone}_lora_r{args.rank}_lb{args.last_blocks}"
         history_name = f"{tag}_history.jsonl"
         lora_meta = {"rank": args.rank, "alpha": args.alpha, "last_blocks": args.last_blocks}
         extra_resume_payload = {"lora": lora_meta}

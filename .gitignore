@@ -87,3 +87,6 @@ config.yaml
 # Internal docs (planning, notes, constraints — local only)
 docs/
 
+.*/
+
+checkpoints

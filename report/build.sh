@@ -3,7 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEX_DIR="$SCRIPT_DIR/tex"
-PDF_OUT="$SCRIPT_DIR/report.pdf"
+
+# padre della cartella dello script
+OUTPUT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PDF_OUT="$OUTPUT_DIR/report.pdf"
+
 PDFLATEX="${PDFLATEX:-/Library/TeX/texbin/pdflatex}"
 BIBTEX="${BIBTEX:-/Library/TeX/texbin/bibtex}"
 
