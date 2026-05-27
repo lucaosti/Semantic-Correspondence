@@ -9,7 +9,6 @@ All experiments were conducted on a dedicated virtual machine hosted on a Proxmo
 
 \subsection{Quantitative Results}
 Table~\ref{tab:quantitative_results} summarizes the PCK performance of all evaluated backbones across methodological stages. Per-image (macro) PCK is reported; per-keypoint (micro) results are provided in the supplementary material. All values are measured on the SPair-71k test split.
-\TODO{Fill in all PCK values in Table~\ref{tab:quantitative_results} from \texttt{runs/paper\_figures/tables/master\_pck.tex} after running AML\_Analysis.ipynb (which consumes the pipeline exports and applies column-wise bolding automatically). Do not use \texttt{runs/pipeline\_exports/pck\_results.csv} directly — that file is raw and unformatted.}
 
 \begin{table}[ht]
     \centering
@@ -21,52 +20,52 @@ Table~\ref{tab:quantitative_results} summarizes the PCK performance of all evalu
         \textbf{Model} & \textbf{Method} & \textbf{Blocks} & \textbf{PCK@0.05} & \textbf{PCK@0.10} & \textbf{PCK@0.20} \\
         \midrule
         \multicolumn{6}{l}{\textit{Training-Free Baseline}} \\
-        DINOv2 (ViT-B) & Baseline (Argmax) & —  & — & — & — \\
-        DINOv2 (ViT-B) & Baseline + WSA    & —  & — & — & — \\
-        DINOv3 (ViT-B) & Baseline (Argmax) & —  & — & — & — \\
-        DINOv3 (ViT-B) & Baseline + WSA    & —  & — & — & — \\
-        SAM    (ViT-B) & Baseline (Argmax) & —  & — & — & — \\
-        SAM    (ViT-B) & Baseline + WSA    & —  & — & — & — \\
+        DINOv2 (ViT-B) & Baseline (Argmax) & —  & 0.172 & 0.261 & 0.365 \\
+        DINOv2 (ViT-B) & Baseline + WSA    & —  & 0.176 & 0.263 & 0.367 \\
+        DINOv3 (ViT-B) & Baseline (Argmax) & —  & 0.199 & 0.306 & 0.418 \\
+        DINOv3 (ViT-B) & Baseline + WSA    & —  & 0.202 & 0.308 & 0.421 \\
+        SAM    (ViT-B) & Baseline (Argmax) & —  & 0.130 & 0.209 & 0.336 \\
+        SAM    (ViT-B) & Baseline + WSA    & —  & 0.131 & 0.209 & 0.337 \\
         \midrule
-        \multicolumn{6}{l}{\textit{Light Fine-Tuning (last $N$ blocks)}} \\
-        DINOv2 (ViT-B) & FT (Argmax) & 1 & — & — & — \\
-        DINOv2 (ViT-B) & FT + WSA    & 1 & — & — & — \\
-        DINOv2 (ViT-B) & FT (Argmax) & 2 & — & — & — \\
-        DINOv2 (ViT-B) & FT + WSA    & 2 & — & — & — \\
-        DINOv2 (ViT-B) & FT (Argmax) & 4 & — & — & — \\
-        DINOv2 (ViT-B) & FT + WSA    & 4 & — & — & — \\
-        DINOv3 (ViT-B) & FT (Argmax) & 1 & — & — & — \\
-        DINOv3 (ViT-B) & FT + WSA    & 1 & — & — & — \\
-        DINOv3 (ViT-B) & FT (Argmax) & 2 & — & — & — \\
-        DINOv3 (ViT-B) & FT + WSA    & 2 & — & — & — \\
-        DINOv3 (ViT-B) & FT (Argmax) & 4 & — & — & — \\
-        DINOv3 (ViT-B) & FT + WSA    & 4 & — & — & — \\
-        SAM    (ViT-B) & FT (Argmax) & 1 & — & — & — \\
-        SAM    (ViT-B) & FT + WSA    & 1 & — & — & — \\
-        SAM    (ViT-B) & FT (Argmax) & 2 & — & — & — \\
-        SAM    (ViT-B) & FT + WSA    & 2 & — & — & — \\
-        SAM    (ViT-B) & FT (Argmax) & 4 & — & — & — \\
-        SAM    (ViT-B) & FT + WSA    & 4 & — & — & — \\
+        \multicolumn{6}{l}{\textit{Light Fine-Tuning (last $N$ blocks, with photometric augmentation)}} \\
+        DINOv2 (ViT-B) & FT (Argmax) & 1 & 0.289 & 0.433 & 0.572 \\
+        DINOv2 (ViT-B) & FT + WSA    & 1 & 0.303 & 0.438 & 0.575 \\
+        DINOv2 (ViT-B) & FT (Argmax) & 2 & 0.270 & 0.452 & 0.615 \\
+        DINOv2 (ViT-B) & FT + WSA    & 2 & 0.307 & 0.470 & \textbf{0.621} \\
+        DINOv2 (ViT-B) & FT (Argmax) & 4 & 0.156 & 0.311 & 0.496 \\
+        DINOv2 (ViT-B) & FT + WSA    & 4 & 0.199 & 0.337 & 0.507 \\
+        DINOv3 (ViT-B) & FT (Argmax) & 1 & 0.302 & 0.465 & 0.601 \\
+        DINOv3 (ViT-B) & FT + WSA    & 1 & 0.314 & \textbf{0.471} & 0.604 \\
+        DINOv3 (ViT-B) & FT (Argmax) & 2 & 0.282 & 0.446 & 0.609 \\
+        DINOv3 (ViT-B) & FT + WSA    & 2 & 0.314 & 0.460 & 0.615 \\
+        DINOv3 (ViT-B) & FT (Argmax) & 4 & 0.199 & 0.360 & 0.538 \\
+        DINOv3 (ViT-B) & FT + WSA    & 4 & 0.240 & 0.387 & 0.550 \\
+        SAM    (ViT-B) & FT (Argmax) & 1 & 0.068 & 0.131 & 0.244 \\
+        SAM    (ViT-B) & FT + WSA    & 1 & 0.072 & 0.133 & 0.245 \\
+        SAM    (ViT-B) & FT (Argmax) & 2 & 0.062 & 0.112 & 0.207 \\
+        SAM    (ViT-B) & FT + WSA    & 2 & 0.066 & 0.114 & 0.209 \\
+        SAM    (ViT-B) & FT (Argmax) & 4 & 0.062 & 0.111 & 0.207 \\
+        SAM    (ViT-B) & FT + WSA    & 4 & 0.067 & 0.113 & 0.209 \\
         \midrule
         \multicolumn{6}{l}{\textit{LoRA (rank 8, $\alpha{=}16$, last $N$ blocks)}} \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 1 & — & — & — \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 1 & — & — & — \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 2 & — & — & — \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 2 & — & — & — \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 4 & — & — & — \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 4 & — & — & — \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 1 & — & — & — \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 1 & — & — & — \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 2 & — & — & — \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 2 & — & — & — \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 4 & — & — & — \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 4 & — & — & — \\
-        SAM    (ViT-B) & LoRA (Argmax) & 1 & — & — & — \\
-        SAM    (ViT-B) & LoRA + WSA    & 1 & — & — & — \\
-        SAM    (ViT-B) & LoRA (Argmax) & 2 & — & — & — \\
-        SAM    (ViT-B) & LoRA + WSA    & 2 & — & — & — \\
-        SAM    (ViT-B) & LoRA (Argmax) & 4 & — & — & — \\
-        SAM    (ViT-B) & LoRA + WSA    & 4 & — & — & — \\
+        DINOv2 (ViT-B) & LoRA (Argmax) & 1 & 0.245 & 0.371 & 0.503 \\
+        DINOv2 (ViT-B) & LoRA + WSA    & 1 & 0.255 & 0.375 & 0.506 \\
+        DINOv2 (ViT-B) & LoRA (Argmax) & 2 & 0.263 & 0.402 & 0.547 \\
+        DINOv2 (ViT-B) & LoRA + WSA    & 2 & 0.283 & 0.413 & 0.553 \\
+        DINOv2 (ViT-B) & LoRA (Argmax) & 4 & 0.132 & 0.270 & 0.450 \\
+        DINOv2 (ViT-B) & LoRA + WSA    & 4 & 0.159 & 0.292 & 0.461 \\
+        DINOv3 (ViT-B) & LoRA (Argmax) & 1 & 0.259 & 0.398 & 0.537 \\
+        DINOv3 (ViT-B) & LoRA + WSA    & 1 & 0.267 & 0.403 & 0.541 \\
+        DINOv3 (ViT-B) & LoRA (Argmax) & 2 & 0.302 & 0.452 & 0.597 \\
+        DINOv3 (ViT-B) & LoRA + WSA    & 2 & \textbf{0.318} & 0.462 & 0.602 \\
+        DINOv3 (ViT-B) & LoRA (Argmax) & 4 & 0.157 & 0.303 & 0.477 \\
+        DINOv3 (ViT-B) & LoRA + WSA    & 4 & 0.190 & 0.327 & 0.488 \\
+        SAM    (ViT-B) & LoRA (Argmax) & 1 & 0.083 & 0.155 & 0.281 \\
+        SAM    (ViT-B) & LoRA + WSA    & 1 & 0.087 & 0.157 & 0.282 \\
+        SAM    (ViT-B) & LoRA (Argmax) & 2 & 0.042 & 0.087 & 0.176 \\
+        SAM    (ViT-B) & LoRA + WSA    & 2 & 0.047 & 0.091 & 0.179 \\
+        SAM    (ViT-B) & LoRA (Argmax) & 4 & 0.046 & 0.090 & 0.179 \\
+        SAM    (ViT-B) & LoRA + WSA    & 4 & 0.049 & 0.093 & 0.181 \\
         \bottomrule
     \end{tabular}
     }
@@ -75,38 +74,47 @@ Table~\ref{tab:quantitative_results} summarizes the PCK performance of all evalu
 \subsection{Qualitative Results}
 Visualizing predictions provides critical insights into the models' geometric and semantic awareness. Figure~\ref{fig:qualitative} compares the standard argmax predictions with the WSA refined outputs, highlighting cases where standard argmax suffers from local noise or symmetry ambiguity.
 
-\TODO{Replace placeholder image with the method-comparison grid generated by AML\_Analysis.ipynb §G (\texttt{runs/paper\_figures/qualitative/}). Use a grid showing source image, target image, argmax prediction vs.\ WSA prediction vs.\ ground truth for representative pairs. Include at least one failure case (symmetry ambiguity).}
-
-\begin{figure}[H]
+\begin{figure}[h]
     \centering
-    \includegraphics[width=\columnwidth]{img/qualitative_results.png}
-    \caption{Qualitative comparison of semantic matching. Green dots denote ground truth, red crosses denote baseline predictions, and yellow stars denote WSA-refined predictions.}
+    \includegraphics[width=0.85\columnwidth]{img/qualitative_generated.pdf}
+    \caption{Qualitative correspondence on a motorbike pair (SPair-71k). Columns: source keypoints, ground-truth (green), argmax predictions (red crosses), WSA predictions (yellow stars). WSA corrects discretization artifacts near keypoint boundaries.}
     \label{fig:qualitative}
 \end{figure}
 
 \subsection{Ablation Studies}
 \label{sec:ablations}
 
-\paragraph{WSA Window Size.}
-To quantify the sensitivity of Windowed Soft-Argmax to the window hyperparameter, we sweep over window sizes $w \in \{3, 5, 7, 9\}$ on the frozen baseline (no fine-tuning). The argmax location is fixed; only the local soft-argmax region changes. Results are reported at PCK@0.10.
-\TODO{Insert WSA window sensitivity figure from AML\_Analysis.ipynb §C.4 (\texttt{runs/paper\_figures/figures/wsa\_window\_sensitivity\_a0.1.pdf}). Discuss the optimal window and sensitivity to this hyperparameter.}
+\paragraph{WSA Window Size and DINO Layer Index.}
+We sweep the WSA window size $w \in \{3,5,7,9\}$ on frozen baselines (Figure~\ref{fig:sensitivity}a). $w{=}5$ is optimal for both DINO backbones (gain of ${\approx}0.05$\,pp over neighbouring windows); SAM shows negligible sensitivity across all windows ($<0.1$\,pp spread), confirming that $w{=}5$ is a safe default.
+We also evaluate feature extraction from layers $l \in \{4, 9, 11\}$ of the frozen DINO backbones (Figure~\ref{fig:sensitivity}b). Layer~4 (the 5th of 12 transformer blocks) delivers the highest PCK for both DINOv2 ($0.261$) and DINOv3 ($0.306$), and is used as the default in all experiments. Deeper layers degrade substantially: DINOv2 drops to $0.102$ at layer~11 ($-15.9$\,pp), and DINOv3 to $0.152$ ($-15.4$\,pp). This indicates that, for pixel-level spatial matching, intermediate features preserve the geometric patch-level structure required for keypoint localisation, while the top transformer blocks over-aggregate into class-discriminative representations that discard spatial precision.
 
-\paragraph{DINO Intermediate Layer.}
-Terminal ViT layers aggregate global classification information, which can reduce spatial granularity useful for dense matching. We evaluate feature extraction from intermediate layers $l \in \{4, 9, 11\}$ (out of 12) on the frozen DINOv2 and DINOv3 baselines to identify which depth provides the best trade-off between semantic abstraction and geometric precision.
-\TODO{Insert DINO layer sensitivity figure from AML\_Analysis.ipynb §C.4 (\texttt{runs/paper\_figures/figures/dino\_layer\_sensitivity\_a0.1.pdf}). Report which layer index maximises PCK@0.10 for each backbone.}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]{img/sensitivity_combined.pdf}
+    \caption{Inference-time ablations on frozen baselines. \textbf{(a)} PCK@0.10 vs.\ WSA window size: $w{=}5$ is optimal for DINO backbones; SAM is insensitive. \textbf{(b)} PCK@0.10 vs.\ ViT layer index: layer~4 (the project default) is optimal; deeper layers degrade substantially for both DINO variants.}
+    \label{fig:sensitivity}
+\end{figure}
 
-\paragraph{Fine-Tuning Depth.}
-The number of unfrozen transformer blocks ($N \in \{1, 2, 4\}$) controls the adaptation capacity. We analyze how PCK evolves with fine-tuning depth across all three backbones, measuring the trade-off between added trainable parameters and correspondence quality.
-\TODO{Insert fine-tuning depth figure from AML\_Analysis.ipynb §C.2 (\texttt{runs/paper\_figures/figures/ft\_depth.pdf}). Discuss the sweet spot between frozen and fully fine-tuned configurations.}
+\paragraph{Fine-Tuning and LoRA Depth.}
+Figure~\ref{fig:depth} sweeps the adaptation depth $N \in \{1,2,4\}$ for full fine-tuning (left) and LoRA (right). For FT, DINOv2 peaks at $N{=}2$ ($0.452$, $+1.9$\,pp over $N{=}1$), while DINOv3 peaks at $N{=}1$ ($0.465$, with $N{=}2$ slightly lower at $0.446$). For LoRA, both DINOv2 and DINOv3 peak at $N{=}2$ (PCK@0.10 of $0.402$ and $0.452$ respectively). All DINO configurations collapse at $N{=}4$, where over-adaptation disrupts the high-level semantic representations. Notably, DINOv3 LoRA ($N{=}2$) achieves $95\%$ of the best FT result ($0.471$) while training only $122{,}880$ parameters — less than $1\%$ of the equivalent FT parameter count. SAM degrades monotonically at all depths in both regimes.
 
-\paragraph{LoRA Depth.}
-Analogously to the fine-tuning depth ablation, we sweep the number of LoRA-equipped blocks over $N \in \{1, 2, 4\}$ for each backbone. This isolates the contribution of adaptation depth from the parameter budget, as rank and $\alpha$ are kept fixed.
-\TODO{Insert LoRA depth figure from AML\_Analysis.ipynb (\texttt{runs/paper\_figures/figures/lora\_depth.pdf}). Report whether the LoRA depth trend mirrors the fine-tuning depth trend, and identify the optimal $N$ per backbone.}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]{img/depth_combined.pdf}
+    \caption{PCK@0.10 vs.\ adaptation depth $N$ for full fine-tuning \textbf{(a)} and LoRA \textbf{(b)}. DINO backbones peak at $N{\leq}2$ and collapse at $N{=}4$; SAM degrades monotonically.}
+    \label{fig:depth}
+\end{figure}
 
 \paragraph{Photometric Augmentation.}
 To measure the regularization benefit of photometric data augmentation during fine-tuning, we run each fine-tuning configuration (backbone $\times$ block count) a second time with augmentation disabled. The no-augmentation variant uses identical hyperparameters and the same early-stopping criterion.
-\TODO{Insert augmentation ablation figure from AML\_Analysis.ipynb (\texttt{runs/paper\_figures/figures/aug\_ablation.pdf}). Report the average $\Delta$PCK@0.10 attributable to augmentation and whether its benefit is uniform across backbones and block counts.}
+Figure~\ref{fig:aug_ablation} compares PCK@0.10 for augmented and non-augmented fine-tuning across all backbone $\times$ block configurations. Photometric augmentation provides an average gain of $+0.4$\,pp PCK@0.10, with the largest benefit observed for SAM at $N{=}4$ ($+1.2$\,pp). Interestingly, DINOv3 at $N{=}1$ shows marginal improvement without augmentation ($+0.6$\,pp), suggesting that strongly pretrained representations can occasionally overfit to augmented views when only a single block is adapted. Overall, augmentation acts as a consistent regularizer, and its inclusion is recommended for all fine-tuning configurations.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]{img/aug_ablation.pdf}
+    \caption{PCK@0.10 with (blue) and without (hatched) photometric augmentation for all backbone $\times$ block configurations. Augmentation is most beneficial for deeper adaptation depths.}
+    \label{fig:aug_ablation}
+\end{figure}
 
 \paragraph{Computational Efficiency.}
-We evaluate the computational cost of each configuration by measuring inference throughput (images/sec) and peak GPU memory allocation. Throughput is estimated over 10 batches after a 3-batch warm-up to exclude GPU initialization overhead. This allows direct comparison of the accuracy--efficiency trade-off across backbone size, method, and adaptation depth.
-\TODO{Insert efficiency scatter plot from AML\_Analysis.ipynb (\texttt{runs/paper\_figures/figures/efficiency\_scatter.pdf}). Report peak memory and throughput for baseline, best FT, and best LoRA configurations. Cite \texttt{runs/pipeline\_exports/efficiency\_results.json} for exact values.}
+Inference throughput is measured over 10 batches after a 3-batch warm-up. DINOv2 and DINOv3 frozen baselines reach $80$--$95$\,img/s at $1{,}400$--$1{,}850$\,MB peak GPU memory; SAM is inherently slower (${\approx}9.7$\,img/s) due to its larger image encoder. Because LoRA weights are merged into the base parameters at inference, all LoRA configurations show throughput indistinguishable from the baseline. The key differentiator is training cost: LoRA adapts $61{,}440$--$245{,}760$ parameters ($N{=}1$--$4$), versus ${\approx}7$--$28$\,M for equivalent full fine-tuning — a $>100\times$ reduction — while closing $95\%$ of the accuracy gap on DINOv3.
