@@ -27,6 +27,11 @@
 \usepackage[pagebackref,breaklinks,colorlinks,allcolors=cvprblue]{hyperref}
 
 %%%%%%%%% PAPER ID  - PLEASE UPDATE
+% Toggle supplementary PF-Willow / PF-Pascal tables.
+% Set \showpftablestrue to include them; \showpftablesfalse (default) omits them to stay within 8 pages.
+\newif\ifshowpftables
+\showpftablesfalse   % <-- change to \showpftablestrue to re-enable
+
 \def\paperID{*****} % *** Enter the Paper ID here
 \def\confName{CVPR}
 \def\confYear{2026}

@@ -4,7 +4,7 @@
 \subsection{Experimental Setup}
 \paragraph{Dataset and Metrics.} We evaluate our models on the SPair-71k benchmark~\cite{min2019spair}. Following strict validation protocols, the training split is used for optimization, the validation split for hyperparameter tuning, and the test split exclusively for final reporting. Performance is measured using the Percentage of Correct Keypoints (PCK) metric at thresholds $\alpha \in \{0.05, 0.1, 0.2\}$, normalized by the target object's bounding box size.
 
-\paragraph{Implementation Details.} Experiments are conducted using the Base (ViT-B) variants of DINOv2, DINOv3, and SAM. Both fine-tuning and LoRA stages are trained with AdamW on a Gaussian Cross-Entropy loss. Fine-tuning uses LR $5\times10^{-5}$ and weight decay $0.01$; LoRA uses LR $10^{-3}$ and weight decay $0.0$ (no regularization, as the low-rank matrices are already strongly constrained by their rank). Due to memory constraints, the batch size is set to 20 for DINO backbones and 4 for SAM. Input images are resized to fixed resolutions: $518\times518$ for DINOv2 and $512\times512$ for DINOv3 and SAM. Training uses early stopping with patience 7 on validation loss. LoRA adapters (rank 8, $\alpha{=}16$) are applied to the MLP layers of the last $N$ transformer blocks, where $N$ is swept over $\{1, 2, 4\}$ as an ablation (Section~\ref{sec:ablations}). For fine-tuning, we additionally run a no-augmentation variant to quantify the effect of photometric data augmentation. Throughput (images/sec) and peak GPU memory are measured after three warm-up batches to characterize computational efficiency.
+\paragraph{Implementation Details.} Experiments are conducted using the Base (ViT-B) variants of DINOv2, DINOv3, and SAM. Both fine-tuning and LoRA stages are trained with AdamW on a Gaussian Cross-Entropy loss. Fine-tuning uses LR $5\times10^{-5}$ and weight decay $0.01$; LoRA uses LR $10^{-3}$ and weight decay $0.0$ (no regularization, as the low-rank matrices are already strongly constrained by their rank). Due to memory constraints, the batch size is set to 20 for DINO backbones and 4 for SAM. Input images are resized to fixed resolutions: $518\times518$ for DINOv2 and $512\times512$ for DINOv3 and SAM. Training uses early stopping with patience 7 on validation loss. Both fine-tuning and LoRA sweep the number of adapted blocks $N \in \{1, 2, 4\}$ as an ablation (Section~\ref{sec:ablations}); LoRA adapters (rank 8, $\alpha{=}16$) are applied to the MLP layers of the last $N$ blocks. For fine-tuning, we additionally run a no-augmentation variant to quantify the effect of photometric data augmentation. Throughput (images/sec) and peak GPU memory are measured after three warm-up batches to characterize computational efficiency.
 All experiments were conducted on a dedicated virtual machine hosted on a Proxmox hypervisor, equipped with an NVIDIA GeForce RTX~5080 GPU (16\,GB VRAM), an Intel Core i5 processor with 10 logical cores allocated out of 20 available on the host, and 24\,GB of RAM out of 32\,GB available on the host system. Training the full pipeline (18 fine-tuning and LoRA stages across three backbones and three adaptation depths) required several days of uninterrupted GPU computation, making repeated full re-runs for hyperparameter search infeasible within the project timeline.
 
 \subsection{Quantitative Results}
@@ -72,12 +72,12 @@ Table~\ref{tab:quantitative_results} summarizes the PCK performance of all evalu
 \end{table}
 
 \subsection{Qualitative Results}
-Visualizing predictions provides critical insights into the models' geometric and semantic awareness. Figure~\ref{fig:qualitative} compares the standard argmax predictions with the WSA refined outputs, highlighting cases where standard argmax suffers from local noise or symmetry ambiguity.
+Visualizing predictions provides critical insights into the models' geometric and semantic awareness. Figure~\ref{fig:qualitative} shows a challenging viewpoint-variant motorbike pair (person-mounted source vs.\ standalone target) across four backbone/method combinations, illustrating how fine-tuning improves semantic localization over the frozen baseline.
 
 \begin{figure}[h]
     \centering
     \includegraphics[width=0.85\columnwidth]{img/qualitative_generated.pdf}
-    \caption{Qualitative correspondence on a motorbike pair (SPair-71k). Columns: source keypoints, ground-truth (green), argmax predictions (red crosses), WSA predictions (yellow stars). WSA corrects discretization artifacts near keypoint boundaries.}
+    \caption{Qualitative correspondence on a motorbike pair (SPair-71k). Each row shows a backbone/method combination: source image (left) with keypoints (green circle = correct match, red = incorrect) and target (right) with predicted location (X) vs ground-truth (circle). Fine-tuning (ft\_lb2) improves DINOv2 from 0/4 to 2/4 on this difficult viewpoint-variant pair.}
     \label{fig:qualitative}
 \end{figure}
 
@@ -96,7 +96,7 @@ We also evaluate feature extraction from layers $l \in \{4, 9, 11\}$ of the froz
 \end{figure}
 
 \paragraph{Fine-Tuning and LoRA Depth.}
-Figure~\ref{fig:depth} sweeps the adaptation depth $N \in \{1,2,4\}$ for full fine-tuning (left) and LoRA (right). For FT, DINOv2 peaks at $N{=}2$ ($0.452$, $+1.9$\,pp over $N{=}1$), while DINOv3 peaks at $N{=}1$ ($0.465$, with $N{=}2$ slightly lower at $0.446$). For LoRA, both DINOv2 and DINOv3 peak at $N{=}2$ (PCK@0.10 of $0.402$ and $0.452$ respectively). All DINO configurations collapse at $N{=}4$, where over-adaptation disrupts the high-level semantic representations. Notably, DINOv3 LoRA ($N{=}2$) achieves $95\%$ of the best FT result ($0.471$) while training only $122{,}880$ parameters — less than $1\%$ of the equivalent FT parameter count. SAM degrades monotonically at all depths in both regimes.
+Figure~\ref{fig:depth} sweeps the adaptation depth $N \in \{1,2,4\}$ for full fine-tuning (left) and LoRA (right). For FT, DINOv2 peaks at $N{=}2$ ($0.452$, $+1.9$\,pp over $N{=}1$), while DINOv3 peaks at $N{=}1$ ($0.465$, with $N{=}2$ slightly lower at $0.446$). For LoRA, both DINOv2 and DINOv3 peak at $N{=}2$ (PCK@0.10 of $0.402$ and $0.452$ respectively). All DINO configurations collapse at $N{=}4$, where over-adaptation disrupts the high-level semantic representations. Notably, DINOv3 LoRA ($N{=}2$) achieves $96\%$ of the best FT result ($0.471$) while training only $122{,}880$ parameters — less than $1\%$ of the equivalent FT parameter count. SAM degrades monotonically at all depths in both regimes.
 
 \begin{figure}[H]
     \centering
@@ -107,7 +107,7 @@ Figure~\ref{fig:depth} sweeps the adaptation depth $N \in \{1,2,4\}$ for full fi
 
 \paragraph{Photometric Augmentation.}
 To measure the regularization benefit of photometric data augmentation during fine-tuning, we run each fine-tuning configuration (backbone $\times$ block count) a second time with augmentation disabled. The no-augmentation variant uses identical hyperparameters and the same early-stopping criterion.
-Figure~\ref{fig:aug_ablation} compares PCK@0.10 for augmented and non-augmented fine-tuning across all backbone $\times$ block configurations. Photometric augmentation provides an average gain of $+0.4$\,pp PCK@0.10, with the largest benefit observed for SAM at $N{=}4$ ($+1.2$\,pp). Interestingly, DINOv3 at $N{=}1$ shows marginal improvement without augmentation ($+0.6$\,pp), suggesting that strongly pretrained representations can occasionally overfit to augmented views when only a single block is adapted. Overall, augmentation acts as a consistent regularizer, and its inclusion is recommended for all fine-tuning configurations.
+Figure~\ref{fig:aug_ablation} compares PCK@0.10 for augmented and non-augmented fine-tuning across all backbone $\times$ block configurations. Photometric augmentation provides an average gain of $+0.4$\,pp PCK@0.10, with the largest benefit observed for SAM at $N{=}4$ ($+1.3$\,pp). Interestingly, DINOv3 at $N{=}1$ shows marginal improvement without augmentation ($+0.6$\,pp), suggesting that strongly pretrained representations can occasionally overfit to augmented views when only a single block is adapted. Overall, augmentation acts as a consistent regularizer, and its inclusion is recommended for all fine-tuning configurations.
 
 \begin{figure}[H]
     \centering

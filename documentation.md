@@ -1,7 +1,5 @@
 # Semantic Correspondence — Technical Documentation
 
-This document is the **authoritative technical reference** for the repository: architecture, defaults, theory, and operational contracts.
-
 ---
 
 ## 1. Purpose and scope
@@ -143,9 +141,9 @@ PF_PASCAL_ROOT: Optional[str] = None
 ```
 
 The pipeline skips a PF stage gracefully (with a warning) if the dataset directory
-or its annotation CSV is not present.  Evaluation results are exported to
-`runs/pipeline_exports/pck_results_pf_willow.json` and
-`runs/pipeline_exports/pck_results_pf_pascal.json`.
+or its annotation CSV is not present.  The standalone evaluation script
+(`scripts/eval_pf_standalone.py`) exports all results to a single file:
+`runs/pipeline_exports/pck_results_pf.json`.
 
 ---
 

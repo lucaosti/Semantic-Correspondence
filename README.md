@@ -100,6 +100,7 @@ The two training notebooks **do not** produce paper figures any more — they on
 - Per-image, per-point, per-category, per-difficulty, and per-keypoint-name breakdowns using the project's own in-house batched evaluator on `SPair71kPairDataset`
 - Inference is wrapped in `torch.inference_mode()`, padded keypoints are skipped via `valid_mask`, and the eval DataLoader uses `persistent_workers` + `prefetch_factor`
 - Exports: `runs/pipeline_exports/pck_results.json`, `pck_results_per_category.json`, `pck_results_by_difficulty_flag.json`, `pck_results_wsa_sweep.json`, `pck_results_layer_sweep.json`, `efficiency_results.json`
+- **Cross-dataset generalization** on PF-Willow and PF-Pascal: run `python scripts/download_pf_datasets.py` to prepare the datasets, then `python scripts/eval_pf_standalone.py`; results are exported to `runs/pipeline_exports/pck_results_pf.json`
 - Run **`AML_Analysis.ipynb`** to turn those exports into LaTeX tables, paper-ready figures, and qualitative overlays under `runs/paper_figures/`.
 
 ## Documentation
