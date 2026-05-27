@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 _REPO = Path(__file__).resolve().parents[1]
 _SAM_VIT_B_DEFAULT = _REPO / "checkpoints" / "sam_vit_b_01ec64.pth"
+_SAM_VIT_L_DEFAULT = _REPO / "checkpoints" / "sam_vit_l_0b3195.pth"
 
 # =============================================================================
 # TOGGLES — triplets follow (DINOv2, DINOv3, SAM)
@@ -47,20 +48,41 @@ RUN_EVAL_WSA_SWEEP: Tuple[bool, bool, bool] = (True, True, True)
 RUN_EVAL_LAYER_SWEEP: Tuple[bool, bool, bool] = (True, True, False)
 RUN_EXPORT_METRICS_TABLES: bool = True
 RUN_PYTEST: bool = True
+# PF-Willow / PF-Pascal cross-dataset evaluation (inference only; skipped gracefully
+# if the dataset directory does not exist).
+RUN_EVAL_PF_WILLOW: Tuple[bool, bool, bool] = (True, True, True)
+RUN_EVAL_PF_PASCAL: Tuple[bool, bool, bool] = (True, True, True)
 
 # =============================================================================
 # SHARED CONFIG
 # =============================================================================
 
 SPAIR_ROOT: Optional[str] = None
+PF_WILLOW_ROOT: Optional[str] = None   # None → auto-resolved via PF_WILLOW_ROOT env / repo default
+PF_PASCAL_ROOT: Optional[str] = None   # None → auto-resolved via PF_PASCAL_ROOT env / repo default
 CHECKPOINT_DIR: str = "checkpoints"
 LAST_BLOCKS_LIST: List[int] = [1, 2, 4]
 LORA_RANK: int = 8
-LORA_LAST_BLOCKS: int = 2
+LORA_LAST_BLOCKS: int = 2  # kept for backward compat; LORA_LAST_BLOCKS_LIST takes precedence
+LORA_LAST_BLOCKS_LIST: List[int] = [1, 2, 4]
 
 DINOV2_WEIGHTS: Optional[str] = None
 DINOV3_WEIGHTS: Optional[str] = None
 SAM_CHECKPOINT: Optional[str] = str(_SAM_VIT_B_DEFAULT) if _SAM_VIT_B_DEFAULT.is_file() else None
+
+# Weight paths for size variants (ViT-S / ViT-L); B variant uses the variables above.
+DINOV2_VITS_WEIGHTS: Optional[str] = None
+DINOV2_VITL_WEIGHTS: Optional[str] = None
+DINOV3_VITS_WEIGHTS: Optional[str] = None
+DINOV3_VITL_WEIGHTS: Optional[str] = None
+SAM_VIT_L_CHECKPOINT: Optional[str] = str(_SAM_VIT_L_DEFAULT) if _SAM_VIT_L_DEFAULT.is_file() else None
+
+# Backbone size variants — empty by default; extend to enable ViT-S / ViT-L sweeps.
+# Example: ["dinov2_vits14", "dinov2_vitl14", "sam_vit_l"]
+BACKBONE_SIZE_VARIANTS: List[str] = []
+TRAIN_FINETUNE_SIZE_VARIANTS: bool = True
+TRAIN_LORA_SIZE_VARIANTS: bool = True
+RUN_EVAL_SIZE_VARIANTS: bool = True
 
 FT_BATCH_SIZE: int = 20
 FT_ACCUMULATION_STEPS: int = 1  # effective batch = FT_BATCH_SIZE * FT_ACCUMULATION_STEPS
@@ -78,16 +100,37 @@ LORA_LR: float = 1e-3
 LORA_ALPHA: float = 16.0
 PRECISION: str = "auto"
 COMPILE: bool = True  # silently no-op on non-CUDA / Ampere<8.0 (see _training_common.maybe_compile_model)
-FT_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {"sam_vit_b": 4}
-LORA_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {"sam_vit_b": 4}
+TRAIN_FINETUNE_NO_AUG: bool = True  # also run finetune without photometric augmentation
+FT_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {
+    "sam_vit_b": 4,
+    "sam_vit_l": 3,
+    "dinov2_vitl14": 12,
+    "dinov3_vitl16": 12,
+}
+LORA_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {
+    "sam_vit_b": 4,
+    "sam_vit_l": 3,
+    "dinov2_vitl14": 14,
+    "dinov3_vitl16": 14,
+}
+EVAL_BATCH_SIZE: int = 8
+EVAL_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {
+    "sam_vit_b": 1,  # OOM at bs=8 during inference (no gradients, but SAM encoder is large)
+    "sam_vit_l": 1,
+}
 RESUME_SAVE_INTERVAL: int = 50
 LOG_BATCH_INTERVAL: int = 50
 DINO_LAYER_INDICES: int = 4
 PREPROCESS: str = "FIXED_RESIZE"
 IMAGE_SIZE_BY_BACKBONE: Dict[str, Tuple[int, int]] = {
+    "dinov2_vits14": (518, 518),
     "dinov2_vitb14": (518, 518),
+    "dinov2_vitl14": (518, 518),
+    "dinov3_vits16": (512, 512),
     "dinov3_vitb16": (512, 512),
+    "dinov3_vitl16": (512, 512),
     "sam_vit_b": (512, 512),
+    "sam_vit_l": (512, 512),
 }
 IMAGE_HEIGHT: int = 784
 IMAGE_WIDTH: int = 784
@@ -105,7 +148,54 @@ WSA_WINDOW_LIST: Tuple[int, ...] = (3, 5, 7, 9)
 EVAL_LAYER_INDICES_LIST: Tuple[int, ...] = (4, 9, 11)
 
 BACKBONE_NAMES: Tuple[str, str, str] = ("dinov2_vitb14", "dinov3_vitb16", "sam_vit_b")
+_ALL_BACKBONE_NAMES: Tuple[str, ...] = (
+    "dinov2_vits14", "dinov2_vitb14", "dinov2_vitl14",
+    "dinov3_vits16", "dinov3_vitb16", "dinov3_vitl16",
+    "sam_vit_b", "sam_vit_l",
+)
 _ALLOWED_PRECISION: Tuple[str, ...] = ("auto", "fp32", "bf16", "fp16")
+
+
+def _weight_args_for_backbone(backbone: str) -> List[str]:
+    """Return the CLI weight args for a single backbone (for size variant training calls)."""
+    if backbone == "dinov2_vits14" and DINOV2_VITS_WEIGHTS:
+        return ["--dinov2-weights", DINOV2_VITS_WEIGHTS]
+    if backbone == "dinov2_vitb14" and DINOV2_WEIGHTS:
+        return ["--dinov2-weights", DINOV2_WEIGHTS]
+    if backbone == "dinov2_vitl14" and DINOV2_VITL_WEIGHTS:
+        return ["--dinov2-weights", DINOV2_VITL_WEIGHTS]
+    if backbone == "dinov3_vits16" and DINOV3_VITS_WEIGHTS:
+        return ["--dinov3-weights", DINOV3_VITS_WEIGHTS]
+    if backbone == "dinov3_vitb16" and DINOV3_WEIGHTS:
+        return ["--dinov3-weights", DINOV3_WEIGHTS]
+    if backbone == "dinov3_vitl16" and DINOV3_VITL_WEIGHTS:
+        return ["--dinov3-weights", DINOV3_VITL_WEIGHTS]
+    if backbone == "sam_vit_b" and SAM_CHECKPOINT:
+        return ["--sam-checkpoint", SAM_CHECKPOINT]
+    if backbone == "sam_vit_l" and SAM_VIT_L_CHECKPOINT:
+        return ["--sam-checkpoint", SAM_VIT_L_CHECKPOINT]
+    return []
+
+
+def _eval_weights_for_backbone(backbone: str, *, effective_sam_vit_b: Optional[str]) -> Dict[str, Optional[str]]:
+    """Return dinov2_weights/dinov3_weights/sam_checkpoint kwargs for EvalRunSpec."""
+    if backbone == "dinov2_vits14":
+        return {"dinov2_weights": DINOV2_VITS_WEIGHTS, "dinov3_weights": None, "sam_checkpoint": None}
+    if backbone == "dinov2_vitb14":
+        return {"dinov2_weights": DINOV2_WEIGHTS, "dinov3_weights": None, "sam_checkpoint": None}
+    if backbone == "dinov2_vitl14":
+        return {"dinov2_weights": DINOV2_VITL_WEIGHTS, "dinov3_weights": None, "sam_checkpoint": None}
+    if backbone == "dinov3_vits16":
+        return {"dinov2_weights": None, "dinov3_weights": DINOV3_VITS_WEIGHTS, "sam_checkpoint": None}
+    if backbone == "dinov3_vitb16":
+        return {"dinov2_weights": None, "dinov3_weights": DINOV3_WEIGHTS, "sam_checkpoint": None}
+    if backbone == "dinov3_vitl16":
+        return {"dinov2_weights": None, "dinov3_weights": DINOV3_VITL_WEIGHTS, "sam_checkpoint": None}
+    if backbone == "sam_vit_b":
+        return {"dinov2_weights": None, "dinov3_weights": None, "sam_checkpoint": effective_sam_vit_b}
+    if backbone == "sam_vit_l":
+        return {"dinov2_weights": None, "dinov3_weights": None, "sam_checkpoint": SAM_VIT_L_CHECKPOINT}
+    return {"dinov2_weights": None, "dinov3_weights": None, "sam_checkpoint": None}
 
 
 def _normalize_precision_token(value: Any) -> str:
@@ -121,7 +211,7 @@ def _parse_backbone_int_map(name: str, value: Any) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for k, v in value.items():
         backbone = str(k).strip()
-        if backbone not in BACKBONE_NAMES:
+        if backbone not in _ALL_BACKBONE_NAMES:
             raise ValueError(f"{name} contains unknown backbone {backbone!r}.")
         iv = int(v)
         if iv < 1:
@@ -167,6 +257,10 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["SPAIR_ROOT"] = str(paths["spair_root"])
         if paths.get("checkpoint_dir") is not None:
             g["CHECKPOINT_DIR"] = str(paths["checkpoint_dir"])
+        if paths.get("pf_willow_root") is not None:
+            g["PF_WILLOW_ROOT"] = str(paths["pf_willow_root"])
+        if paths.get("pf_pascal_root") is not None:
+            g["PF_PASCAL_ROOT"] = str(paths["pf_pascal_root"])
 
     runtime = raw.get("runtime") or {}
     if isinstance(runtime, dict):
@@ -191,7 +285,7 @@ def _apply_pipeline_yaml(path: Path) -> None:
                 current = dict(g.get("IMAGE_SIZE_BY_BACKBONE", {}))
                 for k, v in raw_map.items():
                     bk = str(k).strip()
-                    if bk not in BACKBONE_NAMES:
+                    if bk not in _ALL_BACKBONE_NAMES:
                         raise ValueError(f"unknown backbone {bk!r} in image_size_by_backbone.")
                     if not (isinstance(v, (list, tuple)) and len(v) == 2):
                         raise ValueError(f"image_size_by_backbone[{bk!r}] must be [h, w].")
@@ -239,6 +333,16 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["DINOV3_WEIGHTS"] = finetune["dinov3_weights"]
         if finetune.get("sam_checkpoint") is not None:
             g["SAM_CHECKPOINT"] = str(finetune["sam_checkpoint"])
+        if finetune.get("dinov2_vits_weights") is not None:
+            g["DINOV2_VITS_WEIGHTS"] = finetune["dinov2_vits_weights"]
+        if finetune.get("dinov2_vitl_weights") is not None:
+            g["DINOV2_VITL_WEIGHTS"] = finetune["dinov2_vitl_weights"]
+        if finetune.get("dinov3_vits_weights") is not None:
+            g["DINOV3_VITS_WEIGHTS"] = finetune["dinov3_vits_weights"]
+        if finetune.get("dinov3_vitl_weights") is not None:
+            g["DINOV3_VITL_WEIGHTS"] = finetune["dinov3_vitl_weights"]
+        if finetune.get("sam_vit_l_checkpoint") is not None:
+            g["SAM_VIT_L_CHECKPOINT"] = str(finetune["sam_vit_l_checkpoint"])
         if finetune.get("batch_size") is not None:
             g["FT_BATCH_SIZE"] = int(finetune["batch_size"])
         if finetune.get("batch_size_by_backbone") is not None:
@@ -265,7 +369,14 @@ def _apply_pipeline_yaml(path: Path) -> None:
         if lora.get("batch_size") is not None:
             g["LORA_BATCH_SIZE"] = int(lora["batch_size"])
         if lora.get("last_blocks") is not None:
-            g["LORA_LAST_BLOCKS"] = int(lora["last_blocks"])
+            _lb = lora["last_blocks"]
+            if isinstance(_lb, (list, tuple)):
+                g["LORA_LAST_BLOCKS_LIST"] = [int(x) for x in _lb]
+            else:
+                g["LORA_LAST_BLOCKS"] = int(_lb)
+        if lora.get("last_blocks_list") is not None:
+            lb_list = lora["last_blocks_list"]
+            g["LORA_LAST_BLOCKS_LIST"] = [int(x) for x in (lb_list if isinstance(lb_list, (list, tuple)) else [lb_list])]
         if lora.get("batch_size_by_backbone") is not None:
             g["LORA_BATCH_SIZE_BY_BACKBONE"] = _parse_backbone_int_map(
                 "lora.batch_size_by_backbone", lora["batch_size_by_backbone"]
@@ -297,6 +408,28 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["RUN_EXPORT_METRICS_TABLES"] = bool(toggles["run_export_metrics_tables"])
         if "run_pytest" in toggles:
             g["RUN_PYTEST"] = bool(toggles["run_pytest"])
+        for key, dest in (
+            ("run_eval_pf_willow", "RUN_EVAL_PF_WILLOW"),
+            ("run_eval_pf_pascal", "RUN_EVAL_PF_PASCAL"),
+        ):
+            if key in toggles and toggles[key] is not None:
+                g[dest] = _triplet_bool(dest, toggles[key])
+        if "train_finetune_no_aug" in toggles:
+            g["TRAIN_FINETUNE_NO_AUG"] = bool(toggles["train_finetune_no_aug"])
+        if "train_finetune_size_variants" in toggles:
+            g["TRAIN_FINETUNE_SIZE_VARIANTS"] = bool(toggles["train_finetune_size_variants"])
+        if "train_lora_size_variants" in toggles:
+            g["TRAIN_LORA_SIZE_VARIANTS"] = bool(toggles["train_lora_size_variants"])
+        if "run_eval_size_variants" in toggles:
+            g["RUN_EVAL_SIZE_VARIANTS"] = bool(toggles["run_eval_size_variants"])
+        if toggles.get("backbone_size_variants") is not None:
+            raw_sv = toggles["backbone_size_variants"]
+            if not isinstance(raw_sv, list):
+                raise ValueError("backbone_size_variants must be a list of backbone names.")
+            for bk in raw_sv:
+                if str(bk).strip() not in _ALL_BACKBONE_NAMES:
+                    raise ValueError(f"backbone_size_variants: unknown backbone {bk!r}.")
+            g["BACKBONE_SIZE_VARIANTS"] = [str(bk).strip() for bk in raw_sv]
     if raw.get("eval_split") is not None:
         g["EVAL_SPLIT"] = str(raw["eval_split"])
 
@@ -308,6 +441,7 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "LAST_BLOCKS_LIST": LAST_BLOCKS_LIST,
         "LORA_RANK": LORA_RANK,
         "LORA_LAST_BLOCKS": LORA_LAST_BLOCKS,
+        "LORA_LAST_BLOCKS_LIST": sorted(LORA_LAST_BLOCKS_LIST),
         "FT_BATCH_SIZE": FT_BATCH_SIZE,
         "FT_EPOCHS": FT_EPOCHS,
         "FT_PATIENCE": FT_PATIENCE,
@@ -336,6 +470,15 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "DINOV2_WEIGHTS": DINOV2_WEIGHTS,
         "DINOV3_WEIGHTS": DINOV3_WEIGHTS,
         "SAM_CHECKPOINT": SAM_CHECKPOINT,
+        "DINOV2_VITS_WEIGHTS": DINOV2_VITS_WEIGHTS,
+        "DINOV2_VITL_WEIGHTS": DINOV2_VITL_WEIGHTS,
+        "DINOV3_VITS_WEIGHTS": DINOV3_VITS_WEIGHTS,
+        "DINOV3_VITL_WEIGHTS": DINOV3_VITL_WEIGHTS,
+        "SAM_VIT_L_CHECKPOINT": SAM_VIT_L_CHECKPOINT,
+        "BACKBONE_SIZE_VARIANTS": sorted(BACKBONE_SIZE_VARIANTS),
+        "TRAIN_FINETUNE_SIZE_VARIANTS": TRAIN_FINETUNE_SIZE_VARIANTS,
+        "TRAIN_LORA_SIZE_VARIANTS": TRAIN_LORA_SIZE_VARIANTS,
+        "RUN_EVAL_SIZE_VARIANTS": RUN_EVAL_SIZE_VARIANTS,
         "EVAL_SPLIT": EVAL_SPLIT,
         "EVAL_LIMIT": EVAL_LIMIT,
         "EVAL_ALPHAS": list(EVAL_ALPHAS),
@@ -357,6 +500,11 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "EVAL_LAYER_INDICES_LIST": list(EVAL_LAYER_INDICES_LIST),
         "RUN_EXPORT_METRICS_TABLES": RUN_EXPORT_METRICS_TABLES,
         "RUN_PYTEST": RUN_PYTEST,
+        "TRAIN_FINETUNE_NO_AUG": TRAIN_FINETUNE_NO_AUG,
+        "PF_WILLOW_ROOT": PF_WILLOW_ROOT,
+        "PF_PASCAL_ROOT": PF_PASCAL_ROOT,
+        "RUN_EVAL_PF_WILLOW": list(RUN_EVAL_PF_WILLOW),
+        "RUN_EVAL_PF_PASCAL": list(RUN_EVAL_PF_PASCAL),
     }
 
 
@@ -451,12 +599,14 @@ def _run_script(cwd: Path, rel_script: str, args: Sequence[str], logger: Pipelin
     return _run_cmd(cwd, [sys.executable, str(cwd / rel_script), *args], logger)
 
 
-def _default_finetune_ckpt_for(cwd: Path, backbone: str, n_blocks: int) -> str:
-    return str(cwd / CHECKPOINT_DIR / f"{backbone}_lastblocks{n_blocks}_best.pt")
+def _default_finetune_ckpt_for(cwd: Path, backbone: str, n_blocks: int, *, noaug: bool = False) -> str:
+    suffix = "_noaug" if noaug else ""
+    return str(cwd / CHECKPOINT_DIR / f"{backbone}_lastblocks{n_blocks}{suffix}_best.pt")
 
 
-def _default_lora_ckpt(cwd: Path, backbone: str) -> str:
-    return str(cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_best.pt")
+def _default_lora_ckpt(cwd: Path, backbone: str, n_blocks: Optional[int] = None) -> str:
+    nb = n_blocks if n_blocks is not None else LORA_LAST_BLOCKS
+    return str(cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_lb{nb}_best.pt")
 
 
 def _resolve_ckpt_path(cwd: Path, path_str: str) -> Optional[str]:
@@ -489,17 +639,18 @@ def _build_eval_specs(
 
     def _base_kwargs(backbone: str) -> Dict[str, Any]:
         h, w = _resolve_image_hw(backbone)
+        wt = _eval_weights_for_backbone(backbone, effective_sam_vit_b=sam_checkpoint)
+        bs = EVAL_BATCH_SIZE_BY_BACKBONE.get(backbone, EVAL_BATCH_SIZE)
         return dict(
             backbone=backbone,
             split=EVAL_SPLIT,
-            dinov2_weights=DINOV2_WEIGHTS,
-            dinov3_weights=DINOV3_WEIGHTS,
-            sam_checkpoint=sam_checkpoint,
             limit=EVAL_LIMIT,
             preprocess=PREPROCESS,
             height=h,
             width=w,
+            batch_size=bs,
             num_workers=num_workers,
+            **wt,
         )
 
     for idx, backbone in enumerate(BACKBONE_NAMES):
@@ -568,22 +719,108 @@ def _build_eval_specs(
                     **bk,
                 ))
 
-        lora_ck_path = _default_lora_ckpt(cwd, backbone)
-        lora_ck = _resolve_ckpt_path(cwd, lora_ck_path)
-        if RUN_EVAL_LORA_CHECKPOINT[idx]:
-            if not lora_ck:
-                logger.log_line(f"WARNING: LoRA checkpoint not found: {lora_ck_path}", err=True)
-            else:
-                specs.append(EvalRunSpec(name=f"{backbone}_lora", checkpoint=lora_ck, **bk))
-        if RUN_EVAL_LORA_WSA[idx] and lora_ck:
+        for lora_nb in LORA_LAST_BLOCKS_LIST:
+            lora_ck_path = _default_lora_ckpt(cwd, backbone, lora_nb)
+            lora_ck = _resolve_ckpt_path(cwd, lora_ck_path)
+            if RUN_EVAL_LORA_CHECKPOINT[idx]:
+                if not lora_ck:
+                    logger.log_line(f"WARNING: LoRA checkpoint not found: {lora_ck_path}", err=True)
+                else:
+                    specs.append(EvalRunSpec(name=f"{backbone}_lora_lb{lora_nb}", checkpoint=lora_ck, **bk))
+            if RUN_EVAL_LORA_WSA[idx] and lora_ck:
+                specs.append(EvalRunSpec(
+                    name=f"{backbone}_lora_lb{lora_nb}_wsa",
+                    checkpoint=lora_ck,
+                    use_window_soft_argmax=True,
+                    wsa_window=WSA_WINDOW,
+                    wsa_temperature=WSA_TEMPERATURE,
+                    **bk,
+                ))
+
+        if TRAIN_FINETUNE_NO_AUG and RUN_EVAL_FINETUNED_CHECKPOINT[idx]:
+            for nb in LAST_BLOCKS_LIST:
+                na_ck_path = _default_finetune_ckpt_for(cwd, backbone, nb, noaug=True)
+                na_ck = _resolve_ckpt_path(cwd, na_ck_path)
+                if na_ck:
+                    specs.append(EvalRunSpec(name=f"{backbone}_ft_lb{nb}_noaug", checkpoint=na_ck, **bk))
+                    if RUN_EVAL_FINETUNED_WSA[idx]:
+                        specs.append(EvalRunSpec(
+                            name=f"{backbone}_ft_lb{nb}_noaug_wsa",
+                            checkpoint=na_ck,
+                            use_window_soft_argmax=True,
+                            wsa_window=WSA_WINDOW,
+                            wsa_temperature=WSA_TEMPERATURE,
+                            **bk,
+                        ))
+
+    # Size variant backbone evals
+    if RUN_EVAL_SIZE_VARIANTS:
+        for backbone in BACKBONE_SIZE_VARIANTS:
+            if backbone not in _ALL_BACKBONE_NAMES:
+                logger.log_line(f"WARNING: unknown size variant backbone {backbone!r}, skipping.", err=True)
+                continue
+            is_sam = backbone.startswith("sam")
+            if is_sam and backbone == "sam_vit_l" and not SAM_VIT_L_CHECKPOINT:
+                logger.log_line(f"WARNING: skipping eval for {backbone}: SAM_VIT_L_CHECKPOINT not set.", err=True)
+                continue
+
+            bk = _base_kwargs(backbone)
+
+            if family == "wsa_sweep":
+                for w in WSA_WINDOW_LIST:
+                    specs.append(EvalRunSpec(
+                        name=f"{backbone}_baseline_wsa_w{w}",
+                        use_window_soft_argmax=True,
+                        wsa_window=int(w),
+                        wsa_temperature=WSA_TEMPERATURE,
+                        **bk,
+                    ))
+                continue
+
+            if family == "layer_sweep":
+                if not is_sam:
+                    for li in EVAL_LAYER_INDICES_LIST:
+                        specs.append(EvalRunSpec(
+                            name=f"{backbone}_baseline_layer{li}",
+                            dino_layer_indices=int(li),
+                            **bk,
+                        ))
+                continue
+
+            specs.append(EvalRunSpec(name=f"{backbone}_baseline", **bk))
             specs.append(EvalRunSpec(
-                name=f"{backbone}_lora_wsa",
-                checkpoint=lora_ck,
+                name=f"{backbone}_baseline_wsa",
                 use_window_soft_argmax=True,
                 wsa_window=WSA_WINDOW,
                 wsa_temperature=WSA_TEMPERATURE,
                 **bk,
             ))
+            for nb in LAST_BLOCKS_LIST:
+                ck_path = _default_finetune_ckpt_for(cwd, backbone, nb)
+                ck = _resolve_ckpt_path(cwd, ck_path)
+                if ck:
+                    specs.append(EvalRunSpec(name=f"{backbone}_ft_lb{nb}", checkpoint=ck, **bk))
+                    specs.append(EvalRunSpec(
+                        name=f"{backbone}_ft_lb{nb}_wsa",
+                        checkpoint=ck,
+                        use_window_soft_argmax=True,
+                        wsa_window=WSA_WINDOW,
+                        wsa_temperature=WSA_TEMPERATURE,
+                        **bk,
+                    ))
+            for lora_nb in LORA_LAST_BLOCKS_LIST:
+                lora_ck_path = _default_lora_ckpt(cwd, backbone, lora_nb)
+                lora_ck = _resolve_ckpt_path(cwd, lora_ck_path)
+                if lora_ck:
+                    specs.append(EvalRunSpec(name=f"{backbone}_lora_lb{lora_nb}", checkpoint=lora_ck, **bk))
+                    specs.append(EvalRunSpec(
+                        name=f"{backbone}_lora_lb{lora_nb}_wsa",
+                        checkpoint=lora_ck,
+                        use_window_soft_argmax=True,
+                        wsa_window=WSA_WINDOW,
+                        wsa_temperature=WSA_TEMPERATURE,
+                        **bk,
+                    ))
 
     return specs
 
@@ -612,6 +849,33 @@ def _export_tables(
             json.dump(list(results), f, indent=2)
         logger.log_line(f"Wrote {path}.")
         return
+
+    # Export efficiency data alongside main results
+    eff_rows: List[Dict[str, Any]] = []
+    for r in results:
+        thr = r.get("throughput_img_per_sec")
+        mem = r.get("peak_memory_mb")
+        if thr is None and mem is None:
+            continue
+        info_: Optional[Any] = None
+        try:
+            from evaluation.figures import parse_run_name as _prn
+            info_ = _prn(str(r.get("name", "")))
+        except Exception:
+            pass
+        eff_rows.append({
+            "name": r.get("name"),
+            "backbone": info_.backbone if info_ else None,
+            "method": info_.method if info_ else None,
+            "throughput_img_per_sec": thr,
+            "peak_memory_mb": mem,
+            "pck@0.1": (r.get("metrics") or {}).get("pck@0.1"),
+        })
+    if eff_rows:
+        eff_path = out_dir / "efficiency_results.json"
+        with open(eff_path, "w", encoding="utf-8") as f:
+            json.dump(eff_rows, f, indent=2)
+        logger.log_line(f"Wrote {eff_path}.")
 
     rows = metrics_rows_for_table(results)
     json_path = out_dir / "pck_results.json"
@@ -689,12 +953,41 @@ def _export_tables(
     logger.log_line("Wrote " + " | ".join(wrote) + ".")
 
 
+def _eval_ckpt_path(cwd: Path, family: str) -> Path:
+    """Return path to the per-spec JSONL checkpoint for *family*."""
+    return cwd / "runs" / "eval_checkpoints" / f"{family}.jsonl"
+
+
+def _load_eval_checkpoint(ckpt_path: Path) -> Dict[str, Any]:
+    """Load already-completed spec results keyed by spec name, or {}."""
+    if not ckpt_path.exists():
+        return {}
+    done: Dict[str, Any] = {}
+    for line in ckpt_path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+            done[r["name"]] = r
+        except Exception:
+            pass
+    return done
+
+
+def _append_eval_checkpoint(ckpt_path: Path, result: Dict[str, Any]) -> None:
+    """Append one spec result to the checkpoint JSONL (atomic line append)."""
+    ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(ckpt_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(result, default=str) + "\n")
+
+
 def _run_eval_and_export(
     cwd: Path, sam_checkpoint: Optional[str], logger: PipelineLogger,
     *, num_workers: int, device_str: str,
 ) -> int:
     import torch
-    from evaluation.experiment_runner import run_comparison_batch
+    from evaluation.experiment_runner import run_spair_pck_eval
 
     device = torch.device(device_str)
 
@@ -717,17 +1010,160 @@ def _run_eval_and_export(
         if not specs:
             continue
         any_specs = True
-        logger.log_line(f"-- eval family={family} ({len(specs)} specs)")
-        results = run_comparison_batch(
-            specs, spair_root=SPAIR_ROOT, alphas=EVAL_ALPHAS, device=device,
+
+        ckpt_path = _eval_ckpt_path(cwd, family)
+        done = _load_eval_checkpoint(ckpt_path)
+        skipped = len(done)
+        logger.log_line(
+            f"-- eval family={family} ({len(specs)} specs"
+            + (f", {skipped} already done — resuming" if skipped else "")
+            + ")"
         )
-        for r in results:
-            logger.log_line(f"--- {r['name']} --- {r['metrics']}")
+
+        results: List[Dict[str, Any]] = list(done.values())
+        for i, spec in enumerate(specs):
+            if spec.name in done:
+                logger.log_line(f"[eval] skip {spec.name} (checkpoint)")
+                continue
+            logger.log_line(f"[eval] {i+1}/{len(specs)} {spec.name}")
+            r = run_spair_pck_eval(
+                spec, spair_root=SPAIR_ROOT, alphas=EVAL_ALPHAS, device=device,
+            )
+            logger.log_line(f"[eval] done {spec.name} — {r['metrics']}")
+            _append_eval_checkpoint(ckpt_path, r)
+            results.append(r)
+
         if RUN_EXPORT_METRICS_TABLES:
             _export_tables(cwd, results, logger, family=family)
 
     if not any_specs:
         logger.log_line("No PCK eval specs selected.")
+    return 0
+
+
+def _build_pf_eval_specs(
+    cwd: Path,
+    sam_checkpoint: Optional[str],
+    logger: PipelineLogger,
+    *,
+    dataset: str,
+    pf_root: Optional[str],
+    num_workers: int,
+) -> List[Any]:
+    """Build evaluation specs for a PF dataset (baseline + best checkpoints).
+
+    Generates one baseline spec per enabled backbone and one checkpoint spec for
+    the best fine-tuned and LoRA checkpoints (if they exist on disk).
+    """
+    from evaluation.experiment_runner import EvalRunSpec
+
+    specs: List[EvalRunSpec] = []
+    toggle = RUN_EVAL_PF_WILLOW if dataset == "pf_willow" else RUN_EVAL_PF_PASCAL
+
+    for idx, backbone in enumerate(BACKBONE_NAMES):
+        if not toggle[idx]:
+            continue
+        if backbone == "sam_vit_b" and not sam_checkpoint:
+            logger.log_line(
+                f"WARNING: skipping {dataset} eval for {backbone}: SAM_CHECKPOINT not set.",
+                err=True,
+            )
+            continue
+
+        h, w = _resolve_image_hw(backbone)
+        wt = _eval_weights_for_backbone(backbone, effective_sam_vit_b=sam_checkpoint)
+        base_kw: Dict[str, Any] = dict(
+            backbone=backbone,
+            split=EVAL_SPLIT,
+            limit=EVAL_LIMIT,
+            preprocess=PREPROCESS,
+            height=h,
+            width=w,
+            num_workers=num_workers,
+            dataset=dataset,
+            dataset_root=pf_root,
+            **wt,
+        )
+
+        specs.append(EvalRunSpec(name=f"{backbone}_baseline_{dataset}", **base_kw))
+
+        for nb in LAST_BLOCKS_LIST:
+            ck = _resolve_ckpt_path(cwd, _default_finetune_ckpt_for(cwd, backbone, nb))
+            if ck:
+                specs.append(EvalRunSpec(
+                    name=f"{backbone}_ft_lb{nb}_{dataset}", checkpoint=ck, **base_kw
+                ))
+
+        for lora_nb in LORA_LAST_BLOCKS_LIST:
+            lora_ck = _resolve_ckpt_path(cwd, _default_lora_ckpt(cwd, backbone, lora_nb))
+            if lora_ck:
+                specs.append(EvalRunSpec(
+                    name=f"{backbone}_lora_lb{lora_nb}_{dataset}", checkpoint=lora_ck, **base_kw
+                ))
+
+    return specs
+
+
+def _run_pf_eval_and_export(
+    cwd: Path,
+    sam_checkpoint: Optional[str],
+    logger: PipelineLogger,
+    *,
+    dataset: str,
+    pf_root: Optional[str],
+    num_workers: int,
+    device_str: str,
+) -> int:
+    """Run PCK evaluation for one PF dataset and export results to JSON."""
+    import torch
+    from evaluation.experiment_runner import run_spair_pck_eval
+
+    from data.paths import resolve_pf_pascal_root, resolve_pf_willow_root
+
+    if dataset == "pf_willow":
+        resolved_root = resolve_pf_willow_root(pf_root)
+    else:
+        resolved_root = resolve_pf_pascal_root(pf_root)
+
+    # Skip gracefully if the dataset directory does not exist.
+    ann_check = (
+        "test_pairs_pf.csv" if dataset == "pf_willow" else os.path.join("annotations", "test_pairs.csv")
+    )
+    if not os.path.isfile(os.path.join(resolved_root, ann_check)):
+        logger.log_line(
+            f"WARNING: {dataset} dataset not found at {resolved_root} — skipping eval.\n"
+            "  Run python scripts/download_pf_datasets.py to acquire the dataset.",
+            err=True,
+        )
+        return 0
+
+    device = torch.device(device_str)
+    specs = _build_pf_eval_specs(
+        cwd, sam_checkpoint, logger,
+        dataset=dataset, pf_root=pf_root, num_workers=num_workers,
+    )
+    if not specs:
+        logger.log_line(f"No specs generated for {dataset}.")
+        return 0
+
+    logger.log_line(f"-- eval dataset={dataset} ({len(specs)} specs)")
+    results = [
+        run_spair_pck_eval(s, alphas=EVAL_ALPHAS, device=device)
+        for s in specs
+    ]
+    for r in results:
+        logger.log_line(f"--- {r['name']} --- {r['metrics']}")
+
+    if RUN_EXPORT_METRICS_TABLES:
+        out_dir = cwd / "runs" / "pipeline_exports"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        result_path = out_dir / f"pck_results_{dataset}.json"
+        import json as _json  # noqa: PLC0415
+
+        with open(result_path, "w", encoding="utf-8") as f:
+            _json.dump(results, f, indent=2)
+        logger.log_line(f"Wrote {result_path}.")
+
     return 0
 
 
@@ -892,51 +1328,224 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                 _ps.mark_step_done(cwd, state, ft_sid)
             _trace_stage(cwd, logger, "done", ft_sid, exit_code=0)
 
+    if TRAIN_FINETUNE_NO_AUG:
+        for i, backbone in enumerate(BACKBONE_NAMES):
+            if not TRAIN_FINETUNE[i]:
+                continue
+            if backbone == "sam_vit_b" and not effective_sam:
+                logger.log_line("ERROR: TRAIN_FINETUNE_NO_AUG for SAM requires SAM_CHECKPOINT.", err=True)
+                return 2
+            for nb in LAST_BLOCKS_LIST:
+                ft_sid = f"finetune_noaug:{backbone}:lb{nb}"
+                if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), ft_sid):
+                    logger.log_line(f"[SKIP] stage_id={ft_sid}")
+                    _trace_stage(cwd, logger, "skip", ft_sid, reason="already_completed")
+                    continue
+                ft_bs = _resolve_batch_size("finetune", backbone)
+                ft_h, ft_w = _resolve_image_hw(backbone)
+                args = [
+                    "--mode", "finetune",
+                    *base_train,
+                    "--height", str(ft_h),
+                    "--width", str(ft_w),
+                    "--batch-size", str(ft_bs),
+                    "--lr", str(FT_LR),
+                    "--weight-decay", str(FT_WEIGHT_DECAY),
+                    "--backbone", backbone,
+                    "--epochs", str(FT_EPOCHS),
+                    "--patience", str(FT_PATIENCE),
+                    "--min-delta", str(FT_MIN_DELTA),
+                    "--last-blocks", str(nb),
+                    "--layer-indices", str(DINO_LAYER_INDICES),
+                    "--no-augment",
+                ]
+                if FT_ACCUMULATION_STEPS > 1:
+                    args.extend(["--accumulation-steps", str(FT_ACCUMULATION_STEPS)])
+                logger.log_line(f"stage_id={ft_sid} batch_size={ft_bs} precision={eff_precision}")
+                resume_file = (cwd / CHECKPOINT_DIR / f"{backbone}_lastblocks{nb}_noaug_resume.pt").resolve()
+                if PIPELINE_RESUME and resume_file.is_file():
+                    args.extend(["--resume", str(resume_file)])
+                    logger.log_line(f"[RESUME] stage_id={ft_sid} checkpoint={resume_file}")
+                    _trace_stage(cwd, logger, "resume_prepare", ft_sid, path=str(resume_file))
+                _trace_stage(cwd, logger, "start", ft_sid)
+                rc = _run_script(cwd, "scripts/train.py", args, logger)
+                if rc != 0:
+                    _trace_stage(cwd, logger, "fail", ft_sid, exit_code=rc)
+                    return rc
+                if PIPELINE_RESUME:
+                    _ps.mark_step_done(cwd, state, ft_sid)
+                _trace_stage(cwd, logger, "done", ft_sid, exit_code=0)
+
     for i, backbone in enumerate(BACKBONE_NAMES):
         if not TRAIN_LORA[i]:
             continue
         if backbone == "sam_vit_b" and not effective_sam:
             logger.log_line("ERROR: TRAIN_LORA for SAM requires SAM_CHECKPOINT.", err=True)
             return 2
-        lora_bs = _resolve_batch_size("lora", backbone)
-        lora_sid = f"lora:{backbone}"
-        if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), lora_sid):
-            logger.log_line(f"[SKIP] stage_id={lora_sid}")
-            _trace_stage(cwd, logger, "skip", lora_sid, reason="already_completed")
+        # Backward-compat: migrate old single-value lora checkpoint if present
+        _legacy = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_best.pt").resolve()
+        if _legacy.is_file():
+            for _nb in LORA_LAST_BLOCKS_LIST:
+                _new = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_lb{_nb}_best.pt").resolve()
+                if not _new.is_file() and _nb == LORA_LAST_BLOCKS:
+                    import shutil as _shutil
+                    _shutil.copy2(str(_legacy), str(_new))
+                    logger.log_line(f"[MIGRATE] copied {_legacy.name} → {_new.name}")
+        for lora_nb in LORA_LAST_BLOCKS_LIST:
+            lora_bs = _resolve_batch_size("lora", backbone)
+            lora_sid = f"lora:{backbone}:lb{lora_nb}"
+            if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), lora_sid):
+                logger.log_line(f"[SKIP] stage_id={lora_sid}")
+                _trace_stage(cwd, logger, "skip", lora_sid, reason="already_completed")
+                continue
+            lora_h, lora_w = _resolve_image_hw(backbone)
+            args = [
+                "--mode", "lora",
+                *base_train,
+                "--height", str(lora_h),
+                "--width", str(lora_w),
+                "--batch-size", str(lora_bs),
+                "--lr", str(LORA_LR),
+                "--alpha", str(LORA_ALPHA),
+                "--backbone", backbone,
+                "--epochs", str(LORA_EPOCHS),
+                "--patience", str(LORA_PATIENCE),
+                "--min-delta", str(LORA_MIN_DELTA),
+                "--last-blocks", str(lora_nb),
+                "--rank", str(LORA_RANK),
+                "--layer-indices", str(DINO_LAYER_INDICES),
+            ]
+            if LORA_ACCUMULATION_STEPS > 1:
+                args.extend(["--accumulation-steps", str(LORA_ACCUMULATION_STEPS)])
+            logger.log_line(f"stage_id={lora_sid} batch_size={lora_bs} precision={eff_precision}")
+            resume_lora = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_lb{lora_nb}_resume.pt").resolve()
+            if PIPELINE_RESUME and resume_lora.is_file():
+                args.extend(["--resume", str(resume_lora)])
+                logger.log_line(f"[RESUME] stage_id={lora_sid} checkpoint={resume_lora}")
+                _trace_stage(cwd, logger, "resume_prepare", lora_sid, path=str(resume_lora))
+            _trace_stage(cwd, logger, "start", lora_sid)
+            rc = _run_script(cwd, "scripts/train.py", args, logger)
+            if rc != 0:
+                _trace_stage(cwd, logger, "fail", lora_sid, exit_code=rc)
+                return rc
+            if PIPELINE_RESUME:
+                _ps.mark_step_done(cwd, state, lora_sid)
+            _trace_stage(cwd, logger, "done", lora_sid, exit_code=0)
+
+    # Size variant backbone training
+    for backbone in BACKBONE_SIZE_VARIANTS:
+        if backbone not in _ALL_BACKBONE_NAMES:
+            logger.log_line(f"WARNING: unknown size variant backbone {backbone!r}, skipping.", err=True)
             continue
-        lora_h, lora_w = _resolve_image_hw(backbone)
-        args = [
-            "--mode", "lora",
-            *base_train,
-            "--height", str(lora_h),
-            "--width", str(lora_w),
-            "--batch-size", str(lora_bs),
-            "--lr", str(LORA_LR),
-            "--alpha", str(LORA_ALPHA),
-            "--backbone", backbone,
-            "--epochs", str(LORA_EPOCHS),
-            "--patience", str(LORA_PATIENCE),
-            "--min-delta", str(LORA_MIN_DELTA),
-            "--last-blocks", str(LORA_LAST_BLOCKS),
-            "--rank", str(LORA_RANK),
-            "--layer-indices", str(DINO_LAYER_INDICES),
-        ]
-        if LORA_ACCUMULATION_STEPS > 1:
-            args.extend(["--accumulation-steps", str(LORA_ACCUMULATION_STEPS)])
-        logger.log_line(f"stage_id={lora_sid} batch_size={lora_bs} precision={eff_precision}")
-        resume_lora = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_resume.pt").resolve()
-        if PIPELINE_RESUME and resume_lora.is_file():
-            args.extend(["--resume", str(resume_lora)])
-            logger.log_line(f"[RESUME] stage_id={lora_sid} checkpoint={resume_lora}")
-            _trace_stage(cwd, logger, "resume_prepare", lora_sid, path=str(resume_lora))
-        _trace_stage(cwd, logger, "start", lora_sid)
-        rc = _run_script(cwd, "scripts/train.py", args, logger)
-        if rc != 0:
-            _trace_stage(cwd, logger, "fail", lora_sid, exit_code=rc)
-            return rc
-        if PIPELINE_RESUME:
-            _ps.mark_step_done(cwd, state, lora_sid)
-        _trace_stage(cwd, logger, "done", lora_sid, exit_code=0)
+        is_sam = backbone.startswith("sam")
+        if is_sam and backbone == "sam_vit_l" and not SAM_VIT_L_CHECKPOINT:
+            logger.log_line(
+                f"ERROR: backbone {backbone!r} requires SAM_VIT_L_CHECKPOINT.\n"
+                f"  Download via scripts/download_pretrained_weights.py --variants sam_vit_l\n"
+                f"  or set SAM_VIT_L_CHECKPOINT in run_pipeline.py.",
+                err=True,
+            )
+            return 2
+
+        sz_weight_args = _weight_args_for_backbone(backbone)
+        sz_base: List[str] = []
+        if SPAIR_ROOT:
+            sz_base.extend(["--spair-root", SPAIR_ROOT])
+        sz_base.extend([
+            "--preprocess", PREPROCESS,
+            "--num-workers", str(eff_workers),
+            "--checkpoint-dir", CHECKPOINT_DIR,
+            "--device", eff_device,
+            "--precision", eff_precision,
+            "--resume-save-interval", str(RESUME_SAVE_INTERVAL),
+            "--log-batch-interval", str(LOG_BATCH_INTERVAL),
+            *sz_weight_args,
+        ])
+        if COMPILE:
+            sz_base.append("--compile")
+
+        if TRAIN_FINETUNE_SIZE_VARIANTS:
+            for nb in LAST_BLOCKS_LIST:
+                ft_sid = f"finetune:{backbone}:lb{nb}"
+                if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), ft_sid):
+                    logger.log_line(f"[SKIP] stage_id={ft_sid}")
+                    _trace_stage(cwd, logger, "skip", ft_sid, reason="already_completed")
+                    continue
+                ft_bs = _resolve_batch_size("finetune", backbone)
+                ft_h, ft_w = _resolve_image_hw(backbone)
+                args = [
+                    "--mode", "finetune",
+                    *sz_base,
+                    "--height", str(ft_h),
+                    "--width", str(ft_w),
+                    "--batch-size", str(ft_bs),
+                    "--lr", str(FT_LR),
+                    "--weight-decay", str(FT_WEIGHT_DECAY),
+                    "--backbone", backbone,
+                    "--epochs", str(FT_EPOCHS),
+                    "--patience", str(FT_PATIENCE),
+                    "--min-delta", str(FT_MIN_DELTA),
+                    "--last-blocks", str(nb),
+                    "--layer-indices", str(DINO_LAYER_INDICES),
+                ]
+                if FT_ACCUMULATION_STEPS > 1:
+                    args.extend(["--accumulation-steps", str(FT_ACCUMULATION_STEPS)])
+                logger.log_line(f"stage_id={ft_sid} batch_size={ft_bs} precision={eff_precision}")
+                resume_file = (cwd / CHECKPOINT_DIR / f"{backbone}_lastblocks{nb}_resume.pt").resolve()
+                if PIPELINE_RESUME and resume_file.is_file():
+                    args.extend(["--resume", str(resume_file)])
+                    logger.log_line(f"[RESUME] stage_id={ft_sid} checkpoint={resume_file}")
+                    _trace_stage(cwd, logger, "resume_prepare", ft_sid, path=str(resume_file))
+                _trace_stage(cwd, logger, "start", ft_sid)
+                rc = _run_script(cwd, "scripts/train.py", args, logger)
+                if rc != 0:
+                    _trace_stage(cwd, logger, "fail", ft_sid, exit_code=rc)
+                    return rc
+                if PIPELINE_RESUME:
+                    _ps.mark_step_done(cwd, state, ft_sid)
+                _trace_stage(cwd, logger, "done", ft_sid, exit_code=0)
+
+        if TRAIN_LORA_SIZE_VARIANTS:
+            for lora_nb in LORA_LAST_BLOCKS_LIST:
+                lora_bs = _resolve_batch_size("lora", backbone)
+                lora_sid = f"lora:{backbone}:lb{lora_nb}"
+                if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), lora_sid):
+                    logger.log_line(f"[SKIP] stage_id={lora_sid}")
+                    _trace_stage(cwd, logger, "skip", lora_sid, reason="already_completed")
+                    continue
+                lora_h, lora_w = _resolve_image_hw(backbone)
+                args = [
+                    "--mode", "lora",
+                    *sz_base,
+                    "--height", str(lora_h),
+                    "--width", str(lora_w),
+                    "--batch-size", str(lora_bs),
+                    "--lr", str(LORA_LR),
+                    "--alpha", str(LORA_ALPHA),
+                    "--backbone", backbone,
+                    "--epochs", str(LORA_EPOCHS),
+                    "--patience", str(LORA_PATIENCE),
+                    "--min-delta", str(LORA_MIN_DELTA),
+                    "--last-blocks", str(lora_nb),
+                    "--rank", str(LORA_RANK),
+                    "--layer-indices", str(DINO_LAYER_INDICES),
+                ]
+                if LORA_ACCUMULATION_STEPS > 1:
+                    args.extend(["--accumulation-steps", str(LORA_ACCUMULATION_STEPS)])
+                logger.log_line(f"stage_id={lora_sid} batch_size={lora_bs} precision={eff_precision}")
+                resume_lora = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_lb{lora_nb}_resume.pt").resolve()
+                if PIPELINE_RESUME and resume_lora.is_file():
+                    args.extend(["--resume", str(resume_lora)])
+                    logger.log_line(f"[RESUME] stage_id={lora_sid} checkpoint={resume_lora}")
+                    _trace_stage(cwd, logger, "resume_prepare", lora_sid, path=str(resume_lora))
+                _trace_stage(cwd, logger, "start", lora_sid)
+                rc = _run_script(cwd, "scripts/train.py", args, logger)
+                if rc != 0:
+                    _trace_stage(cwd, logger, "fail", lora_sid, exit_code=rc)
+                    return rc
+                if PIPELINE_RESUME:
+                    _ps.mark_step_done(cwd, state, lora_sid)
+                _trace_stage(cwd, logger, "done", lora_sid, exit_code=0)
 
     any_eval = any(any(t) for t in (
         RUN_EVAL_BASELINE, RUN_EVAL_BASELINE_WSA,
@@ -960,6 +1569,31 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
             if PIPELINE_RESUME:
                 _ps.mark_step_done(cwd, state, ev_sid)
             _trace_stage(cwd, logger, "done", ev_sid, exit_code=0)
+
+    for _pf_dataset, _pf_root, _pf_toggle, _pf_sid in (
+        ("pf_willow", PF_WILLOW_ROOT, RUN_EVAL_PF_WILLOW, "eval_pf_willow"),
+        ("pf_pascal", PF_PASCAL_ROOT, RUN_EVAL_PF_PASCAL, "eval_pf_pascal"),
+    ):
+        if not any(_pf_toggle):
+            continue
+        if PIPELINE_RESUME and _ps.is_step_done(state.get("completed", []), _pf_sid):
+            logger.log_line(f"[SKIP] stage_id={_pf_sid}")
+            _trace_stage(cwd, logger, "skip", _pf_sid, reason="already_completed")
+        else:
+            _trace_stage(cwd, logger, "start", _pf_sid)
+            rc = _run_pf_eval_and_export(
+                cwd, effective_sam, logger,
+                dataset=_pf_dataset,
+                pf_root=_pf_root,
+                num_workers=eff_workers,
+                device_str=eff_device,
+            )
+            if rc != 0:
+                _trace_stage(cwd, logger, "fail", _pf_sid, exit_code=rc)
+                return rc
+            if PIPELINE_RESUME:
+                _ps.mark_step_done(cwd, state, _pf_sid)
+            _trace_stage(cwd, logger, "done", _pf_sid, exit_code=0)
 
     if RUN_PYTEST:
         py_sid = "pytest"

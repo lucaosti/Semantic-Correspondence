@@ -19,7 +19,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 PCK_ALPHAS_DEFAULT: Tuple[float, ...] = (0.05, 0.1, 0.2)
 BACKBONES_ORDER: Tuple[str, ...] = ("dinov2_vitb14", "dinov3_vitb16", "sam_vit_b")
-METHODS_ORDER: Tuple[str, ...] = ("baseline", "ft_lb1", "ft_lb2", "ft_lb4", "lora")
+METHODS_ORDER: Tuple[str, ...] = (
+    "baseline", "ft_lb1", "ft_lb2", "ft_lb4",
+    "lora", "lora_lb1", "lora_lb2", "lora_lb4",
+)
 
 _DIFFICULTY_FLAGS: Tuple[str, ...] = (
     "viewpoint_variation",
@@ -40,15 +43,17 @@ class RunInfo:
 
     name: str
     backbone: str
-    method: str  # one of: baseline, ft_lbN, lora
+    method: str  # one of: baseline, ft_lbN, ft_lbN_noaug, lora, lora_lbN
     last_blocks: Optional[int]
     wsa: bool
     wsa_window: Optional[int] = None
     layer_index: Optional[int] = None
+    augmented: Optional[bool] = None  # None for baseline; True/False for trained methods
+    lora_last_blocks: Optional[int] = None  # set for lora_lbN methods
 
 
 _RUN_NAME_RE = re.compile(
-    r"^(?P<bb>dinov2_vitb14|dinov3_vitb16|sam_vit_b)"
+    r"^(?P<bb>(?:dinov[23]_vit[a-z0-9]+|sam_vit_[a-z]))"
     r"_(?P<rest>.+)$"
 )
 
@@ -71,14 +76,23 @@ def parse_run_name(name: str) -> Optional[RunInfo]:
     wsa = rest.endswith("_wsa")
     if wsa:
         rest = rest[: -len("_wsa")]
+
+    noaug = rest.endswith("_noaug")
+    if noaug:
+        rest = rest[: -len("_noaug")]
+
     if rest == "baseline":
         return RunInfo(name, bb, "baseline", None, wsa)
     if rest == "lora":
-        return RunInfo(name, bb, "lora", None, wsa)
+        return RunInfo(name, bb, "lora", None, wsa, augmented=True)
+    m_lora_lb = re.match(r"^lora_lb(\d+)$", rest)
+    if m_lora_lb:
+        n = int(m_lora_lb.group(1))
+        return RunInfo(name, bb, f"lora_lb{n}", None, wsa, augmented=True, lora_last_blocks=n)
     m2 = re.match(r"^ft_lb(\d+)$", rest)
     if m2:
         n = int(m2.group(1))
-        return RunInfo(name, bb, f"ft_lb{n}", n, wsa)
+        return RunInfo(name, bb, f"ft_lb{n}", n, wsa, augmented=not noaug)
     return None
 
 
@@ -99,7 +113,7 @@ def load_pck_exports(exports_dir: Path) -> Dict[str, Any]:
 
     Returns a dict with these keys (each is ``None`` if the file is missing):
     ``pck_results``, ``per_category``, ``by_difficulty_flag``, ``wsa_sweep``,
-    ``layer_sweep``. The ``available`` sub-dict reports presence on disk.
+    ``layer_sweep``, ``efficiency``. The ``available`` sub-dict reports presence on disk.
     """
     exports_dir = Path(exports_dir)
     files = {
@@ -108,6 +122,7 @@ def load_pck_exports(exports_dir: Path) -> Dict[str, Any]:
         "by_difficulty_flag": exports_dir / "pck_results_by_difficulty_flag.json",
         "wsa_sweep": exports_dir / "pck_results_wsa_sweep.json",
         "layer_sweep": exports_dir / "pck_results_layer_sweep.json",
+        "efficiency": exports_dir / "efficiency_results.json",
     }
     payload: Dict[str, Any] = {k: _read_json(p) for k, p in files.items()}
     payload["pck_results"] = payload.get("pck_results") or []
@@ -138,12 +153,14 @@ def build_master_table(pck_data: Dict[str, Any]) -> "Any":
             "method": info.method,
             "last_blocks": info.last_blocks,
             "wsa": info.wsa,
+            "augmented": info.augmented,
+            "lora_last_blocks": info.lora_last_blocks,
         }
         row.update({k: v for k, v in (r.get("metrics") or {}).items()
                     if isinstance(v, (int, float))})
         rows.append(row)
     if not rows:
-        return pd.DataFrame(columns=["backbone", "method", "last_blocks", "wsa"])
+        return pd.DataFrame(columns=["backbone", "method", "last_blocks", "wsa", "augmented"])
     df = pd.DataFrame(rows)
 
     bb_order = {bb: i for i, bb in enumerate(BACKBONES_ORDER)}
@@ -382,6 +399,10 @@ def estimate_trainable_params(
     ckpt_dir = Path(ckpt_dir)
     if method == "lora":
         path = ckpt_dir / f"{backbone}_lora_r{rank}_best.pt"
+    elif re.match(r"^lora_lb(\d+)$", method):
+        m_lb = re.match(r"^lora_lb(\d+)$", method)
+        n_lb = int(m_lb.group(1)) if m_lb else rank
+        path = ckpt_dir / f"{backbone}_lora_r{rank}_lb{n_lb}_best.pt"
     elif method.startswith("ft_lb") and last_blocks is not None:
         path = ckpt_dir / f"{backbone}_lastblocks{last_blocks}_best.pt"
     else:
@@ -398,7 +419,7 @@ def estimate_trainable_params(
     state = blob.get("model") if isinstance(blob, dict) else None
     if not isinstance(state, dict):
         return None
-    if method == "lora":
+    if method == "lora" or method.startswith("lora_lb"):
         return sum(int(v.numel()) for k, v in state.items() if "lora_" in k and hasattr(v, "numel"))
     last_blocks = int(last_blocks) if last_blocks is not None else 0
     block_keys = [k for k in state.keys() if ".blocks." in k]
@@ -734,12 +755,233 @@ def plot_dino_layer_sensitivity(
     )
 
 
+# ---------------------------------------------------------------------------
+# Efficiency table and scatter
+# ---------------------------------------------------------------------------
+
+
+def build_efficiency_table(
+    pck_data: Dict[str, Any],
+    ckpt_dir: Optional[Path] = None,
+    *,
+    rank: int = 8,
+) -> "Any":
+    """Build a DataFrame with throughput, peak memory and PCK@0.1 per run.
+
+    Columns: ``name``, ``backbone``, ``method``, ``trainable_params``,
+    ``throughput_img_per_sec``, ``peak_memory_mb``, ``pck@0.1``.
+    """
+    import pandas as pd
+
+    rows: List[Dict[str, Any]] = []
+    eff_data = pck_data.get("efficiency") or []
+    pck_lookup: Dict[str, float] = {}
+    for r in pck_data.get("pck_results") or []:
+        v = (r.get("metrics") or {}).get("pck@0.1")
+        if v is not None:
+            pck_lookup[str(r.get("name", ""))] = float(v)
+
+    for entry in eff_data:
+        name = str(entry.get("name", ""))
+        info = parse_run_name(name)
+        n_params = None
+        if info is not None and ckpt_dir is not None:
+            n_params = estimate_trainable_params(
+                info.backbone, info.method, ckpt_dir=ckpt_dir,
+                last_blocks=info.last_blocks, rank=rank,
+            )
+        rows.append({
+            "name": name,
+            "backbone": entry.get("backbone") or (info.backbone if info else None),
+            "method": entry.get("method") or (info.method if info else None),
+            "trainable_params": n_params,
+            "throughput_img_per_sec": entry.get("throughput_img_per_sec"),
+            "peak_memory_mb": entry.get("peak_memory_mb"),
+            "pck@0.1": entry.get("pck@0.1") or pck_lookup.get(name),
+        })
+    if not rows:
+        return pd.DataFrame(columns=[
+            "name", "backbone", "method", "trainable_params",
+            "throughput_img_per_sec", "peak_memory_mb", "pck@0.1",
+        ])
+    return pd.DataFrame(rows)
+
+
+def plot_efficiency_scatter(
+    pck_data: Dict[str, Any],
+    out_path: Path,
+    ckpt_dir: Optional[Path] = None,
+    *,
+    rank: int = 8,
+) -> Tuple[Path, Path]:
+    """Scatter plot: PCK@0.1 (y) vs throughput (x, log), marker size ∝ peak memory."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    apply_paper_style()
+    df = build_efficiency_table(pck_data, ckpt_dir, rank=rank)
+    if df.empty or "throughput_img_per_sec" not in df.columns:
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.text(0.5, 0.5, "No efficiency data", ha="center", va="center", transform=ax.transAxes)
+        return save_figure_dual(fig, out_path)
+
+    df = df.dropna(subset=["throughput_img_per_sec", "pck@0.1"])
+    if df.empty:
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.text(0.5, 0.5, "No efficiency data with valid throughput", ha="center", va="center",
+                transform=ax.transAxes)
+        return save_figure_dual(fig, out_path)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    cmap = plt.get_cmap("tab10")
+    backbones = sorted(df["backbone"].dropna().unique())
+    for i, bb in enumerate(backbones):
+        sub = df[df["backbone"] == bb]
+        sizes = sub["peak_memory_mb"].fillna(200).clip(lower=50)
+        sizes_scaled = (sizes / sizes.max() * 400).clip(lower=30)
+        ax.scatter(
+            sub["throughput_img_per_sec"], sub["pck@0.1"],
+            s=sizes_scaled, c=[cmap(i / max(len(backbones) - 1, 1))] * len(sub),
+            alpha=0.8, label=bb,
+        )
+        for _, row in sub.iterrows():
+            ax.annotate(
+                str(row.get("method", "")),
+                (row["throughput_img_per_sec"], row["pck@0.1"]),
+                xytext=(4, 2), textcoords="offset points", fontsize=7, alpha=0.8,
+            )
+    ax.set_xscale("log")
+    ax.set_xlabel("Throughput (images/sec, log scale)")
+    ax.set_ylabel("PCK@0.1 (image macro)")
+    ax.set_title("Efficiency: throughput vs PCK (marker size ∝ peak memory)")
+    ax.legend(title="backbone")
+    # Size legend note
+    ax.text(0.98, 0.02, "Marker size ∝ peak GPU memory",
+            ha="right", va="bottom", transform=ax.transAxes, fontsize=7, alpha=0.7)
+    fig.tight_layout()
+    return save_figure_dual(fig, out_path)
+
+
+# ---------------------------------------------------------------------------
+# Plot: LoRA last-blocks depth sweep
+# ---------------------------------------------------------------------------
+
+
+def plot_lora_depth(
+    df_master: "Any", out_path: Path, *, alphas: Sequence[float] = PCK_ALPHAS_DEFAULT
+) -> Tuple[Path, Path]:
+    """PCK vs unfrozen LoRA blocks for each backbone (analogous to plot_ft_depth)."""
+    import matplotlib.pyplot as plt
+
+    apply_paper_style()
+    df = df_master[
+        (df_master["method"].str.startswith("lora_lb"))
+        & (~df_master["wsa"])
+        & (df_master["lora_last_blocks"].notna())
+    ].copy()
+    if df.empty:
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.text(0.5, 0.5, "No LoRA depth-sweep runs", ha="center", va="center",
+                transform=ax.transAxes)
+        return save_figure_dual(fig, out_path)
+
+    backbones = [bb for bb in BACKBONES_ORDER if bb in set(df["backbone"])]
+    fig, axes = plt.subplots(1, len(backbones), figsize=(5 * len(backbones), 4), squeeze=False)
+    for i, bb in enumerate(backbones):
+        ax = axes[0, i]
+        sub = df[df["backbone"] == bb].sort_values("lora_last_blocks")
+        for a in alphas:
+            col = f"pck@{a:g}"
+            if col in sub.columns:
+                ax.plot(sub["lora_last_blocks"], sub[col], marker="o", label=col)
+        ax.set_xlabel("Unfrozen LoRA blocks")
+        ax.set_ylabel("PCK (image macro)")
+        ax.set_title(bb)
+        ax.set_xticks(sorted(sub["lora_last_blocks"].dropna().unique().astype(int)))
+        ax.legend(fontsize=8)
+    fig.suptitle("LoRA depth sweep (no WSA)")
+    fig.tight_layout()
+    return save_figure_dual(fig, out_path)
+
+
+# ---------------------------------------------------------------------------
+# Plot: augmentation ablation
+# ---------------------------------------------------------------------------
+
+
+def plot_aug_ablation(
+    df_master: "Any", out_path: Path, *, alpha: float = 0.1
+) -> Tuple[Path, Path]:
+    """Paired bars comparing finetune with vs. without photometric augmentation."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    apply_paper_style()
+    metric = f"pck@{alpha:g}"
+
+    if "augmented" not in df_master.columns or metric not in df_master.columns:
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.text(0.5, 0.5, "No augmentation ablation data", ha="center", va="center",
+                transform=ax.transAxes)
+        return save_figure_dual(fig, out_path)
+
+    df = df_master[
+        (df_master["method"].str.startswith("ft_lb"))
+        & (~df_master["wsa"])
+        & (df_master[metric].notna())
+        & (df_master["augmented"].notna())
+    ].copy()
+
+    if df.empty:
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.text(0.5, 0.5, "No augmentation ablation data", ha="center", va="center",
+                transform=ax.transAxes)
+        return save_figure_dual(fig, out_path)
+
+    labels: List[str] = []
+    aug_vals: List[float] = []
+    noaug_vals: List[float] = []
+    for bb in [b for b in BACKBONES_ORDER if b in set(df["backbone"])]:
+        sub_bb = df[df["backbone"] == bb]
+        for lb in sorted(sub_bb["last_blocks"].dropna().unique().astype(int)):
+            sub = sub_bb[sub_bb["last_blocks"] == lb]
+            has_aug = (sub["augmented"] == True).any()
+            has_noaug = (sub["augmented"] == False).any()
+            if not (has_aug and has_noaug):
+                continue
+            v_aug = float(sub[sub["augmented"] == True][metric].mean())
+            v_noaug = float(sub[sub["augmented"] == False][metric].mean())
+            labels.append(f"{bb}\nlb{lb}")
+            aug_vals.append(v_aug)
+            noaug_vals.append(v_noaug)
+
+    if not labels:
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.text(0.5, 0.5, "Need both augmented and no-aug runs", ha="center", va="center",
+                transform=ax.transAxes)
+        return save_figure_dual(fig, out_path)
+
+    x = np.arange(len(labels))
+    width = 0.4
+    fig, ax = plt.subplots(figsize=(max(8, len(labels) * 1.1), 4))
+    ax.bar(x - width / 2, aug_vals, width, label="with augmentation")
+    ax.bar(x + width / 2, noaug_vals, width, label="no augmentation")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=8)
+    ax.set_ylabel(metric)
+    ax.set_title(f"Augmentation ablation at α = {alpha:g}")
+    ax.legend()
+    fig.tight_layout()
+    return save_figure_dual(fig, out_path)
+
+
 __all__ = [
     "BACKBONES_ORDER",
     "METHODS_ORDER",
     "PCK_ALPHAS_DEFAULT",
     "RunInfo",
     "apply_paper_style",
+    "build_efficiency_table",
     "build_master_table",
     "dataframe_to_latex",
     "dataframe_to_markdown",
@@ -749,8 +991,11 @@ __all__ = [
     "parse_run_name",
     "per_category_table",
     "per_difficulty_table",
+    "plot_aug_ablation",
+    "plot_efficiency_scatter",
     "plot_dino_layer_sensitivity",
     "plot_ft_depth",
+    "plot_lora_depth",
     "plot_lora_vs_ft",
     "plot_per_category_heatmap",
     "plot_per_difficulty_bars",

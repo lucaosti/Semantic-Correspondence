@@ -22,11 +22,18 @@ Training is **transfer learning**, not random initialization, when official chec
 
 ### 1.3 Backbones
 
-| Name | Patch | Code |
-|------|-------|------|
-| DINOv2 ViT-B/14 | 14 | `dinov2_vitb14` → `models/dinov2/` |
-| DINOv3 ViT-B/16 | 16 | `dinov3_vitb16` → `models/dinov3/` |
-| SAM ViT-B (image encoder only) | (internal 1024×1024) | `sam_vit_b` → `models/sam/` |
+Primary experiments use the **Base (ViT-B)** variants. Small (ViT-S) and Large (ViT-L) variants are supported for extended ablations and are enabled via `BACKBONE_SIZE_VARIANTS` in `run_pipeline.py`.
+
+| Name | Patch | Variant | Code |
+|------|-------|---------|------|
+| DINOv2 ViT-S/14 | 14 | Small | `dinov2_vits14` → `models/dinov2/` |
+| DINOv2 ViT-B/14 | 14 | Base | `dinov2_vitb14` → `models/dinov2/` |
+| DINOv2 ViT-L/14 | 14 | Large | `dinov2_vitl14` → `models/dinov2/` |
+| DINOv3 ViT-S/16 | 16 | Small | `dinov3_vits16` → `models/dinov3/` |
+| DINOv3 ViT-B/16 | 16 | Base | `dinov3_vitb16` → `models/dinov3/` |
+| DINOv3 ViT-L/16 | 16 | Large | `dinov3_vitl16` → `models/dinov3/` |
+| SAM ViT-B (image encoder only) | (internal 1024×1024) | Base | `sam_vit_b` → `models/sam/` |
+| SAM ViT-L (image encoder only) | (internal 1024×1024) | Large | `sam_vit_l` → `models/sam/` |
 
 Weights are **not** committed to git. Use `scripts/download_pretrained_weights.py` and/or CLI/path flags as described in `README.md`.
 
@@ -36,13 +43,13 @@ Weights are **not** committed to git. Use `scripts/download_pretrained_weights.p
 
 | Path | Responsibility |
 |------|----------------|
-| `data/` | `SPair71kPairDataset`, `spair_collate_fn`, preprocessing, `data/paths.resolve_spair_root` |
+| `data/` | `SPair71kPairDataset`, `PFWillowPairDataset`, `PFPascalPairDataset`, `spair_collate_fn`, preprocessing, path resolvers |
 | `models/common/` | Matching, coords, LoRA, window soft-argmax, `vit_intermediate`, input norm |
 | `models/dinov2/`, `dinov3/`, `sam/` | Backbone implementations; weight loading in `hub_loader.py` / `backbone.py`. `models/dinov2/layers/` and `models/sam/modeling/` are vendored upstream code (Meta); upstream comments/FIXMEs are not first-party concerns. |
 | `training/` | `losses.py`, `engine.py` (batched Gaussian losses), `unfreeze.py`, `early_stopping.py`, `config.py` |
 | `evaluation/` | `experiment_runner.py` (in-house batched PCK runner, also drives the WSA-window and DINO layer-index inference-only ablations), `figures.py` (paper-grade tables/plots: master / per-category / per-difficulty / efficiency tables, training curves, WSA / depth / LoRA-vs-FT plots, WSA-window and DINO-layer sensitivity sweeps), `qualitative.py` (method grids, similarity heatmaps in `viridis`, find-symmetry-ambiguity helper), `visualize.py`, checkpoint helpers |
 | `utils/` | `hardware.py`, `pipeline_state.py`, `paths.py` |
-| `scripts/` | `run_pipeline.py` (orchestrator), `train.py` (unified `--mode finetune|lora`), `verify_dataset.py`, `download_pretrained_weights.py` |
+| `scripts/` | `run_pipeline.py` (orchestrator), `train.py` (unified `--mode finetune|lora`), `verify_dataset.py`, `download_pretrained_weights.py`, `download_pf_datasets.py` |
 | `runs/`, `checkpoints/` | Gitignored artifacts: logs, exports, downloaded weights, training checkpoints |
 
 **Root:** `AML_Local.ipynb` (local training/orchestration), `AML_Colab.ipynb` (Colab training/orchestration), `AML_Analysis.ipynb` (paper-grade analysis only), `README.md`, `requirements.txt`, `pyproject.toml`, `documentation.md`.
@@ -56,7 +63,7 @@ Weights are **not** committed to git. Use `scripts/download_pretrained_weights.p
 - **Extras:** `pip install -e ".[dev]"` (pytest, ruff), `".[notebook]"` (jupyter, ipykernel, pandas).
 - **PyTorch:** Install a wheel matching your hardware; verify CUDA with `torch.cuda.is_available()` and `torch.cuda.get_device_capability(0)` where relevant (`requirements.txt` notes for legacy NVIDIA GPUs).
 
-**Data:** Place SPair-71k under `data/SPair-71k/` or set **`SPAIR_ROOT`**. Run `python scripts/verify_dataset.py` before training.
+**Data:** Place SPair-71k under `data/SPair-71k/` or set **`SPAIR_ROOT`**. Run `python scripts/verify_dataset.py` before training. For cross-dataset evaluation, run `python scripts/download_pf_datasets.py` (see §4.4).
 
 ---
 
@@ -81,7 +88,64 @@ Implementation notes: `data/dataset.py`.
 
 ### 4.3 Batching
 
-`spair_collate_fn` stacks tensor fields; `pair_id_str` is a `list[str]` of length **B**. Keypoints are padded to **`MAX_KEYPOINTS`** (20); invalid slots use **`INVALID_KP_COORD`** (`-2.0`). Training steps use **B pairs** per optimizer step when `--batch-size` is B.
+`spair_collate_fn` stacks tensor fields; `pair_id_str`, `category`, and `src_kp_names` are kept as nested `list[str]` of length **B**. `src_kp_names` contains per-keypoint semantic labels (e.g. `"left_eye"`) extracted from the SPair-71k annotation JSON; invalid/missing slots are empty strings. Keypoints are padded to **`MAX_KEYPOINTS`** (20); invalid slots use **`INVALID_KP_COORD`** (`-2.0`). Training steps use **B pairs** per optimizer step when `--batch-size` is B.
+
+---
+
+### 4.4 Cross-dataset evaluation: PF-Willow and PF-Pascal
+
+The pipeline evaluates trained models on two additional community benchmarks in
+addition to SPair-71k.  Both are **test-only benchmarks** (no training on them).
+
+| Dataset | Categories | Pairs | PCK normalisation |
+|---------|-----------|-------|-------------------|
+| **PF-Willow** (Ham et al., CVPR 2016) | 10 sub-categories | ~900 | Image-size: `alpha × max(out_H, out_W)` |
+| **PF-Pascal** (Ham et al., ECCV 2016) | 20 Pascal VOC classes | ~1300 | Bounding-box: `alpha × max(bbox_W, bbox_H)` |
+
+**Dataset classes:** `data.pf_dataset.PFWillowPairDataset` and `PFPascalPairDataset`.
+Both implement the same `__getitem__` schema as `SPair71kPairDataset` and are
+compatible with `spair_collate_fn` and `evaluation.experiment_runner.run_spair_pck_eval`.
+
+**PCK normalisation detail:**
+
+* PF-Willow uses image-size normalisation: `pck_threshold_bbox` is set to
+  `max(out_H, out_W)` — a constant for all images under fixed-resize preprocessing.
+* PF-Pascal uses bbox normalisation identical to SPair-71k.
+* No difficulty-flag annotations exist in either dataset; all difficulty tensors are
+  set to zero.
+
+**Path resolution (env vars, descending priority):**
+
+| Dataset | Env var | Fallback |
+|---------|---------|---------|
+| PF-Willow | `PF_WILLOW_ROOT` | `DATASET_ROOT/PF-Willow` → `<repo>/data/PF-Willow` |
+| PF-Pascal | `PF_PASCAL_ROOT` | `DATASET_ROOT/PF-Pascal` → `<repo>/data/PF-Pascal` |
+
+**Setup:**
+
+```bash
+python scripts/download_pf_datasets.py            # both datasets
+python scripts/download_pf_datasets.py --datasets pf_willow   # only PF-Willow
+```
+
+PF-Willow is downloaded from the official WILLOW release and converted from MATLAB
+format to CSV (requires `scipy`).  PF-Pascal annotation CSVs are fetched from the
+CATs repository; Pascal VOC 2011 JPEG images must be placed manually (the script
+prints instructions).
+
+**Pipeline toggles (in `run_pipeline.py`):**
+
+```python
+RUN_EVAL_PF_WILLOW: Tuple[bool, bool, bool] = (True, True, True)  # (DINOv2, DINOv3, SAM)
+RUN_EVAL_PF_PASCAL: Tuple[bool, bool, bool] = (True, True, True)
+PF_WILLOW_ROOT: Optional[str] = None   # explicit path override
+PF_PASCAL_ROOT: Optional[str] = None
+```
+
+The pipeline skips a PF stage gracefully (with a warning) if the dataset directory
+or its annotation CSV is not present.  Evaluation results are exported to
+`runs/pipeline_exports/pck_results_pf_willow.json` and
+`runs/pipeline_exports/pck_results_pf_pascal.json`.
 
 ---
 
@@ -89,7 +153,7 @@ Implementation notes: `data/dataset.py`.
 
 ### 5.1 Features
 
-All three backbones are wrapped by **`DenseFeatureExtractor`** (`models/common/dense_extractor.py`), which returns an L2-normalized **`(B, C, Hf, Wf)`** tensor regardless of backbone.
+All backbone families and size variants are wrapped by **`DenseFeatureExtractor`** (`models/common/dense_extractor.py`), which returns an L2-normalized **`(B, C, Hf, Wf)`** tensor regardless of backbone. `DenseExtractorConfig` takes a single `weights_path` field (replaces the former `dinov2_weights_path` / `dinov3_weights_path` / `sam_checkpoint_path` fields); the correct path is routed to the appropriate loader based on `name`.
 
 - **DINO:** `extract_intermediate_dense_grid` fuses intermediate layer outputs into one **`(B, C, Hf, Wf)`** map (`models/common/vit_intermediate.py`).
 - **SAM:** `imagenet_to_sam_input` resizes to **1024×1024**, then `extract_dense_grid_sam` (`models/sam/backbone.py`). The dataset image frame (typically 512×512) is tracked separately from the SAM internal frame; keypoint coordinates are mapped back to the dataset frame inside `DenseFeatureExtractor`.
@@ -148,7 +212,7 @@ Fine-tuning and LoRA have **separate** batch size controls to avoid silent overw
 `FT_BATCH_SIZE_BY_BACKBONE` and `LORA_BATCH_SIZE_BY_BACKBONE` (YAML:
 `finetune.batch_size_by_backbone`, `lora.batch_size_by_backbone`).
 When a backbone is not present in the map, the scalar fallback (`FT_BATCH_SIZE` / `LORA_BATCH_SIZE`) is used.
-See §6.3 above for the normative batch-size policy.
+See the defaults table above for the normative batch-size policy.
 
 Training precision is controlled by `PRECISION` (`auto`/`fp32`/`bf16`/`fp16`) and passed to both training scripts.
 `auto` resolves to `bf16` (or `fp16`) on CUDA and to `fp32` on non-CUDA devices. **Evaluation** runs batched (default `batch_size=8`) under `torch.inference_mode()` with bf16 autocast on CUDA Ampere+; matching is fully tensorized so PCK aggregation is the only Python-level loop.
@@ -180,7 +244,7 @@ require consistent keypoint remapping. Validation datasets are **not** augmented
 
 ### 6.6 LoRA
 
-Injected on late MLP linears (`models/common/lora.py` + backbone-specific hooks). Only adapter weights are updated.
+Injected on late MLP linears (`models/common/lora.py` + backbone-specific hooks). Only adapter weights are updated. The pipeline sweeps the number of LoRA-equipped blocks over `LORA_LAST_BLOCKS_LIST` (default `[1, 2, 4]`), producing one checkpoint per (backbone, block count): `<backbone>_lora_r<rank>_lb<N>_best.pt`. `LORA_LAST_BLOCKS` is kept for backward compatibility but `LORA_LAST_BLOCKS_LIST` takes precedence in all pipeline paths.
 
 ### 6.7 Early stopping and resume
 
@@ -204,7 +268,7 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 
 `experiment_runner.py` schedules multiple **eval specs** (baseline, baseline+WSA, fine-tuned per block count, fine-tuned+WSA, LoRA, LoRA+WSA, plus the WSA-window and DINO layer-index inference-only ablations described in §8.2). Each run uses the project's own `SPair71kPairDataset` (the legacy SD4Match vendor was removed), wraps inference in `torch.inference_mode()` with bf16 autocast on CUDA Ampere+, fuses the source/target forward (`extractor(torch.cat([src, tgt], 0))`), and runs a fully batched matcher (one `grid_sample` plus one `einsum` per batch). Data loading uses `batch_size=8` (configurable per spec), `persistent_workers=True`, and `prefetch_factor` (via `utils.hardware.dataloader_extra_kwargs`); padded keypoints are filtered by per-pair `n_valid` after the matcher returns.
 
-**WSA on trained models (PDF Stage 3):** the pipeline generates WSA variants for fine-tuned and LoRA checkpoints when `RUN_EVAL_FINETUNED_WSA` / `RUN_EVAL_LORA_WSA` are enabled. This measures the benefit of sub-pixel refinement on top of adapted features.
+**WSA on trained models (PDF Stage 3):** the pipeline generates WSA variants for fine-tuned and LoRA checkpoints when `RUN_EVAL_FINETUNED_WSA` / `RUN_EVAL_LORA_WSA` are enabled. This measures the benefit of sub-pixel refinement on top of adapted features. No-augmentation fine-tuned checkpoints also get WSA variants when `RUN_EVAL_FINETUNED_WSA` is enabled.
 
 **Reporting granularity (PDF requirement):** the pipeline exports:
 - **Aggregate:** `pck_results.json`, `pck_results.csv`
@@ -213,7 +277,8 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 - **WSA / layer ablations:** `pck_results_wsa_sweep.json` (WSA window {3,5,7,9} on the baseline) and `pck_results_layer_sweep.json` (DINO intermediate layer index in `EVAL_LAYER_INDICES_LIST`) — inference-only re-runs of the baseline, no extra training.
 - **Averaging note:** `pck@α` = per-image mean (macro); `pck_pt@α` = per-keypoint mean (micro) — the standard metric in most SPair-71k papers (Min et al. 2019, CHM, DHPF, CATs). Both land in `pck_results.csv` and the per-category CSV.
 - **Training loss curves + LR:** `checkpoints/*_history.jsonl` (per-epoch `train_loss`/`val_loss`/`lr`, written by `_training_common.py`); plotted by `AML_Analysis.ipynb` (§F) via `evaluation.figures.plot_training_curves`.
-- **Paper deliverables:** `runs/paper_figures/` (created by `AML_Analysis.ipynb`) contains `tables/master_pck.{tex,md,csv}`, `tables/per_category_a*.csv`, `tables/per_difficulty_a*.csv`, `tables/efficiency.{csv,tex}`, and `figures/{wsa_gain,ft_depth,lora_vs_ft,per_category,per_difficulty,training_curves,wsa_window_sensitivity_a0.1,dino_layer_sensitivity_a0.1}.{pdf,png}` plus qualitative overlays under `qualitative/`. Every figure ships in both PDF (vector, dpi=300) and PNG (raster, dpi=300); matching colormap policy is **viridis** everywhere, never `jet`. Every table has a `.tex` form with column-wise best entries bolded.
+- **Efficiency export:** `runs/pipeline_exports/efficiency_results.json` — per-run throughput (images/sec, measured over 10 batches after a 3-batch warm-up) and peak GPU memory (MB). Written alongside `pck_results.json` by the main eval pass.
+- **Paper deliverables:** `runs/paper_figures/` (created by `AML_Analysis.ipynb`) contains `tables/master_pck.{tex,md,csv}`, `tables/per_category_a*.csv`, `tables/per_difficulty_a*.csv`, `tables/efficiency.{csv,tex}`, and `figures/{wsa_gain,ft_depth,lora_depth,lora_vs_ft,aug_ablation,efficiency_scatter,per_category,per_difficulty,training_curves,wsa_window_sensitivity_a0.1,dino_layer_sensitivity_a0.1}.{pdf,png}` plus qualitative overlays under `qualitative/`. Every figure ships in both PDF (vector, dpi=300) and PNG (raster, dpi=300); matching colormap policy is **viridis** everywhere, never `jet`. Every table has a `.tex` form with column-wise best entries bolded.
 
 ---
 
@@ -223,11 +288,13 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 
 1. Optional **`verify_dataset`**
 2. **Fine-tune** for each enabled backbone × each block count in `LAST_BLOCKS_LIST`
-3. **LoRA** for each enabled backbone
-4. **PCK** matrix: baseline, baseline+WSA, fine-tuned (per block count), fine-tuned+WSA, LoRA, LoRA+WSA (per flags) + optional **`runs/pipeline_exports/`** JSON/CSV + per-category export
-5. Optional **`pytest`**
+3. **Fine-tune (no augmentation)** — if `TRAIN_FINETUNE_NO_AUG=True`, re-runs stage 2 without photometric augmentation; checkpoints named `<backbone>_lastblocks<N>_noaug_best.pt`
+4. **LoRA** for each enabled backbone × each block count in `LORA_LAST_BLOCKS_LIST`
+5. **Size variant** fine-tuning and LoRA for each backbone in `BACKBONE_SIZE_VARIANTS` (empty by default)
+6. **PCK** matrix: baseline, baseline+WSA, fine-tuned (per block count, with and without augmentation), fine-tuned+WSA, LoRA (per block count in `LORA_LAST_BLOCKS_LIST`), LoRA+WSA, size-variant evals + optional **`runs/pipeline_exports/`** JSON/CSV + per-category export + **`efficiency_results.json`** (throughput and peak memory per run)
+7. Optional **`pytest`**
 
-**Tuple order is always** `(dinov2_vitb14, dinov3_vitb16, sam_vit_b)`.
+**Tuple order (primary backbones) is always** `(dinov2_vitb14, dinov3_vitb16, sam_vit_b)`. Size variants are listed separately in `BACKBONE_SIZE_VARIANTS`.
 
 ### 8.2 Default configuration (in-script; YAML overrides)
 
@@ -235,18 +302,21 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 |--------|-----------------|-------------|
 | `LAST_BLOCKS_LIST` | `[1, 2, 4]` | Block counts for fine-tuning sweep (PDF Stage 2) |
 | `FT_BATCH_SIZE` / `LORA_BATCH_SIZE` | 20 / 20 | Pairs per step for DINO backbones; SAM overridden to 4 via per-backbone map |
-| `FT_BATCH_SIZE_BY_BACKBONE` / `LORA_BATCH_SIZE_BY_BACKBONE` | `{"sam_vit_b": 4}` | Per-backbone batch overrides (SAM encoder is VRAM-heavy) |
+| `FT_BATCH_SIZE_BY_BACKBONE` / `LORA_BATCH_SIZE_BY_BACKBONE` | `{"sam_vit_b": 4, "sam_vit_l": 3, "dinov2_vitl14": 12, "dinov3_vitl16": 12}` | Per-backbone batch overrides (large encoders are VRAM-heavy) |
 | `FT_LR` / `LORA_LR` | `5e-5` / `1e-3` | Learning rates |
 | `FT_WEIGHT_DECAY` | `0.01` | Weight decay for fine-tuning |
 | `LORA_ALPHA` | `16.0` | LoRA scaling factor |
-| `LORA_LAST_BLOCKS` | `2` | LoRA block count |
+| `LORA_LAST_BLOCKS` | `2` | Backward-compat scalar; `LORA_LAST_BLOCKS_LIST` takes precedence |
+| `LORA_LAST_BLOCKS_LIST` | `[1, 2, 4]` | LoRA depth sweep; produces one checkpoint per (backbone, block count) |
+| `TRAIN_FINETUNE_NO_AUG` | `True` | Re-runs fine-tuning without photometric augmentation for ablation |
+| `BACKBONE_SIZE_VARIANTS` | `[]` | List of ViT-S / ViT-L backbone names to train and evaluate (off by default) |
 | `PRECISION` | `auto` | Training precision policy (`auto`/`fp32`/`bf16`/`fp16`); MPS/CPU always resolve to fp32 |
 | `FT_EPOCHS` / `LORA_EPOCHS` | 50 | Epochs per training stage (early stopping typically triggers earlier) |
 | `FT_PATIENCE` / `LORA_PATIENCE` | 7 | Early stopping patience (epochs of stagnant val loss before stop) |
 | `FT_MIN_DELTA` / `LORA_MIN_DELTA` | `0.0` | Early-stopping tolerance on val loss. Set > 0 to ignore tiny improvements (e.g. `1e-3`) |
 | `LORA_RANK` | 8 | LoRA rank |
 | `PREPROCESS` | `FIXED_RESIZE` | Image preprocessing mode |
-| `IMAGE_SIZE_BY_BACKBONE` | `{dinov2_vitb14: (518,518), dinov3_vitb16: (512,512), sam_vit_b: (512,512)}` | Per-backbone input size (exact patch-size multiples: 518=37×14, 512=32×16; SAM features always extracted at 1024×1024 internally) |
+| `IMAGE_SIZE_BY_BACKBONE` | `{dinov2_vits14: (518,518), dinov2_vitb14: (518,518), dinov2_vitl14: (518,518), dinov3_vits16: (512,512), dinov3_vitb16: (512,512), dinov3_vitl16: (512,512), sam_vit_b: (512,512), sam_vit_l: (512,512)}` | Per-backbone input size (DINOv2 all variants: 518=37×14; DINOv3 and SAM: 512=32×16; SAM features always extracted at 1024×1024 internally) |
 | `IMAGE_HEIGHT` / `IMAGE_WIDTH` | 784 / 784 | Global fallback size for backbones not listed in `IMAGE_SIZE_BY_BACKBONE` |
 | `EVAL_SPLIT` | `test` | Evaluation split |
 | `EVAL_LIMIT` | 0 (full split) | Pair limit for debugging |
@@ -281,18 +351,7 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 
 ---
 
-## 9. Hardware-aware behavior (`utils/hardware.py`)
-
-- **Device resolution:** CUDA → MPS → CPU when device is `None`.
-- **Multi-GPU selection:** if `CUDA_VISIBLE_DEVICES` is set, only those GPUs are visible to the process; the first visible one is used as logical `cuda:0`.
-- **`num_workers`:** CLI `-1` means auto via `recommended_dataloader_workers` (CUDA: aggressive prefetch; CPU training: smaller pool).
-- **CUDA:** `cudnn.benchmark`, TF32 allow where supported, `pin_memory`, `persistent_workers` + `prefetch_factor` when workers > 0.
-
-**MPS:** Some ops (e.g. `grid_sample` with certain `padding_mode`) may fail; use **CPU** or **CUDA** for parity with Linux training/eval.
-
----
-
-## 10. Notebooks and config file
+## 9. Notebooks and config file
 
 The repository ships **three** notebooks at the root, each with a single, well-defined responsibility:
 
@@ -301,12 +360,12 @@ The repository ships **three** notebooks at the root, each with a single, well-d
 - **`AML_Analysis.ipynb` (analysis only, runs locally on CPU/MPS):** sections **A–I** drive the deliverable pipeline. The notebook is **read-only with respect to `runs/`**: it consumes the pipeline exports listed in §7 and never re-runs training or eval.
   - **A** Setup & inventory of `runs/pipeline_exports/`, `checkpoints/`, `runs/logs/`, `data/SPair-71k/`.
   - **B** Master PCK table → `runs/paper_figures/tables/master_pck.{tex,md,csv}` (column-wise best bolded in LaTeX).
-  - **C** Δ-PCK figures: `wsa_gain_a*.pdf/png` (C.1), `ft_depth.pdf/png` (C.2, PDF Stage 2 question), `lora_vs_ft.pdf/png` (C.3, param-efficiency scatter, x = log-trainable params), and the inference-only **C.4 ablations**: WSA window vs PCK from `pck_results_wsa_sweep.json` → `figures/wsa_window_sensitivity_a0.1.{pdf,png}`; DINO intermediate layer index vs PCK from `pck_results_layer_sweep.json` → `figures/dino_layer_sensitivity_a0.1.{pdf,png}`.
+  - **C** Δ-PCK figures: `wsa_gain_a*.pdf/png` (C.1), `ft_depth.pdf/png` (C.2, PDF Stage 2 question), `lora_vs_ft.pdf/png` (C.3, param-efficiency scatter, x = log-trainable params), `lora_depth.pdf/png` (C.3b, LoRA depth sweep analogous to ft_depth), `aug_ablation.pdf/png` (C.3c, photometric augmentation vs no-augmentation paired bars), and the inference-only **C.4 ablations**: WSA window vs PCK from `pck_results_wsa_sweep.json` → `figures/wsa_window_sensitivity_a0.1.{pdf,png}`; DINO intermediate layer index vs PCK from `pck_results_layer_sweep.json` → `figures/dino_layer_sensitivity_a0.1.{pdf,png}`.
   - **D** Per-category heatmap (run × SPair category) plus top-5 / bottom-5 mean-PCK bar chart.
   - **E** Per-difficulty (viewpoint / scale / truncation / occlusion) low-vs-high bars and CSV.
   - **F** Training curves with annotated best-epoch from each `*_history.jsonl` (also plots LR if present).
   - **G** Qualitative paper-grade overlays: method-comparison grids (rows = method, cols = source/target with predictions vs GT), similarity-heatmap overlays per keypoint (colormap **viridis**), and a failure-case browser ranked by per-image PCK from `pck_results.json`.
-  - **H** Efficiency table from saved checkpoints: trainable parameter count per (backbone, method) plus best-epoch / wall-clock estimate.
+  - **H** Efficiency table: trainable parameter count from checkpoints per (backbone, method), plus inference throughput (images/sec) and peak GPU memory from `efficiency_results.json`, rendered as `tables/efficiency.{csv,tex}` and `figures/efficiency_scatter.{pdf,png}`.
   - **I** Tree print of `runs/paper_figures/` so the user can copy-paste the artifacts into a LaTeX paper.
 - **Adaptation policy (training notebooks):** classify the device by compute capability and VRAM only (no GPU model name is hard-coded). Set `precision`, `compile`, `num_workers`, and `resume_save_interval` from the resulting tier. Hyperparameters (batch sizes, LR, weight decay, epochs, patience, LoRA rank/alpha) are project-fixed; the only deviation is the MPS/CPU batch derogation in `AML_Local.ipynb`.
 - **`config.yaml`:** notebook-generated pipeline configuration. It contains machine-specific absolute paths, so it is **not tracked in git** (see `.gitignore`). The training notebooks write it for `scripts/run_pipeline.py --config config.yaml`.
@@ -318,7 +377,7 @@ The repository ships **three** notebooks at the root, each with a single, well-d
 
 ---
 
-## 11. Coding standards
+## 10. Coding standards
 
 - **Code language:** English for identifiers, docstrings, and comments (see `data/dataset.py` for examples).
 - **Docs:** `documentation.md` (this file) = system reference; `README.md` = quick start.
@@ -330,13 +389,45 @@ The repository ships **three** notebooks at the root, each with a single, well-d
 
 ---
 
-## 12. Theoretical consistency
+## 11. Theoretical consistency
 
 - **Gaussian target + cross-entropy on softmax similarities:** A smooth surrogate for location supervision on a grid; consistent with dense correspondence literature citing SD4Match-style objectives.
 - **Transfer learning:** Training only last blocks or LoRA matches standard adaptation of foundation models to paired data with limited compute.
 - **WSA outside the loss:** Avoids discontinuities from hard argmax in the training objective; refinement is a **test-time** operator.
 - **Split discipline:** Holding out `test` for final metrics limits overfitting to benchmark statistics.
 - **Batch averaging:** Mean of per-pair losses is standard ERM; if batch size changes by orders of magnitude, consider **learning-rate retuning** (not automated here).
+
+---
+
+## 12. Design rationale
+
+Choices mandated by the course PDF (loss type, PCK thresholds, backbone families, stage structure) are not repeated here. The following covers implementation decisions made by the project team.
+
+**L2 normalization of features (§5.1).** The extractor L2-normalizes each spatial descriptor along the channel axis. This makes cosine similarity equal to the dot product and removes per-location magnitude variance, so the matching score reflects only the directional alignment of the descriptor in feature space.
+
+**DINO intermediate layer index = 4 (§5.1).** The final ViT-B layers (9–12) aggregate class-level semantics at the cost of spatial precision. Layer 4 retains both local texture and mid-level semantic abstraction, which is the empirically optimal operating point for dense correspondence on SPair-71k — validated by the layer-sweep ablation (`pck_results_layer_sweep.json`).
+
+**Gaussian sigma = 1.0 feature pixel (§6.1).** At DINOv2 ViT-B resolution (37×37 for 518×518 input), `sigma_feat=1.0` equals one feature cell ≈ 14 image pixels, or about 2.7% of image width. Smaller sigmas produce near-delta targets that are numerically difficult to minimize under softmax; larger sigmas spread supervision across semantically distinct grid cells, diluting the correspondence signal.
+
+**Fused source+target forward (§6.2).** Source and target images are concatenated along the batch axis and processed in one extractor call, then split. This halves the number of backbone forward passes per optimizer step without changing the computed gradients, improving GPU utilization.
+
+**AdamW and weight decay (§6.3).** AdamW decouples L2 regularization from the adaptive gradient step, which is the standard optimizer for ViT adaptation. Fine-tuning uses `weight_decay=0.01`; LoRA uses `weight_decay=0.0` because the adapter matrices (`A`, `B`) are already constrained to low rank — additional L2 doubly penalizes their magnitude and impedes convergence to expressive low-rank solutions.
+
+**`drop_last=True`, `non_blocking=True` in the train DataLoader (§6.3).** `drop_last` ensures all micro-batches share the same shape, which is required by `torch.compile(mode="reduce-overhead")` (no re-tracing on partial batches) and by gradient-accumulation groups to be complete. `non_blocking=True` overlaps host-to-device transfers with the preceding step's GPU compute, hiding H2D latency behind the backward pass.
+
+**Freezing early blocks, fine-tuning last N (§6.4).** Early ViT blocks encode generic low-level features (edges, textures) that transfer across tasks; fine-tuning them on the small SPair-71k training set risks overwriting stable pretrained representations. Late blocks encode more task-specific high-level semantics and adapt efficiently with limited data.
+
+**Same photometric augmentation on both images (§6.5).** Ground-truth correspondences are fixed pixel coordinates. Applying the same random color jitter to source and target preserves these coordinates without remapping. Geometric augmentations are excluded because they would require consistently transforming both images and all annotated keypoint locations.
+
+**LoRA on MLP linears, not attention (§6.6).** Attention weight matrices encode position-sensitive token-mixing patterns; modifying them risks disrupting the alignment between positional encodings and attended spatial locations. MLP `fc1`/`fc2` (DINO) and `lin1`/`lin2` (SAM) linears encode token-wise feature transformations that are more amenable to domain-specific re-weighting without altering the backbone's geometric structure.
+
+**LoRA rank = 8, alpha = 16 (§6.6).** The effective scaling is `alpha/rank = 2.0`, a standard initialization heuristic that keeps the LoRA contribution on the same magnitude scale as the base linear; at initialization, B = 0 so the adapter is an exact pass-through. Rank 8 yields approximately 0.5% trainable parameters relative to the backbone — sufficient for domain adaptation without overfitting on SPair-71k.
+
+**Early stopping patience = 7 (§6.7).** With a 50-epoch budget, 7 stagnant validation-loss epochs represent 14% of the total — conservative enough to accommodate the oscillatory convergence typical of LoRA training at `lr=1e-3`, without exhausting the full budget when the model has converged.
+
+**Image sizes: 518×518 (DINOv2), 512×512 (DINOv3 / SAM) (§8.2).** 518 = 37×14 is the smallest input that yields an exact 37×37 feature grid for DINOv2's patch size of 14; non-multiples produce boundary partial patches that break the spatial regularity of the feature map. DINOv3 uses patch size 16 → 512 = 32×16. SAM processes images internally at 1024×1024; the dataset frame (512×512) is used only for preprocessing, and keypoints are remapped to the dataset frame after feature extraction.
+
+**MAX_KEYPOINTS = 20, INVALID_KP_COORD = −2.0 (§4.3).** SPair-71k has at most 20 annotated keypoints per pair. Fixed-length padding to this value enables fully batched tensor operations throughout training and evaluation. The sentinel −2.0 is below the `grid_sample` normalized-coordinate range [−1, 1], so it is unambiguously detectable by a strict inequality and cannot be confused with a valid keypoint location.
 
 ---
 
@@ -351,12 +442,6 @@ Coverage includes dataset workers, pipeline state, smoke imports, backbone const
 
 ---
 
-## 14. Design rationale
+## 14. Package version
 
-Implementation choices (backbone selection, loss design, WSA, LoRA, photometric augmentation, PCK thresholds) follow the dense correspondence literature cited in the project report.
-
----
-
-## 15. Package version
-
-**`semantic-correspondence`:** version **`0.1.0`** in `pyproject.toml`. This document’s accuracy is tied to the git tree at the time of the last edit to **`documentation.md`**.
+**`semantic-correspondence`:** version **`0.1.0`** in `pyproject.toml`. This document's accuracy is tied to the git tree at the time of the last edit to **`documentation.md`**.

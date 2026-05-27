@@ -62,6 +62,54 @@ def test_parse_run_name_returns_none_for_garbage(bad):
     assert F.parse_run_name(bad) is None
 
 
+@pytest.mark.parametrize("name,backbone,lora_last_blocks,wsa", [
+    ("dinov2_vitb14_lora_lb1", "dinov2_vitb14", 1, False),
+    ("dinov2_vitb14_lora_lb2", "dinov2_vitb14", 2, False),
+    ("dinov2_vitb14_lora_lb4_wsa", "dinov2_vitb14", 4, True),
+    ("sam_vit_b_lora_lb2", "sam_vit_b", 2, False),
+    ("dinov3_vitb16_lora_lb4_wsa", "dinov3_vitb16", 4, True),
+])
+def test_parse_run_name_lora_lb(name, backbone, lora_last_blocks, wsa):
+    info = F.parse_run_name(name)
+    assert info is not None
+    assert info.backbone == backbone
+    assert info.method == f"lora_lb{lora_last_blocks}"
+    assert info.last_blocks is None
+    assert info.lora_last_blocks == lora_last_blocks
+    assert info.wsa is wsa
+    assert info.augmented is True
+
+
+@pytest.mark.parametrize("name,backbone,last_blocks,wsa,augmented", [
+    ("dinov2_vitb14_ft_lb2_noaug", "dinov2_vitb14", 2, False, False),
+    ("dinov3_vitb16_ft_lb1_noaug_wsa", "dinov3_vitb16", 1, True, False),
+    ("sam_vit_b_ft_lb4_noaug", "sam_vit_b", 4, False, False),
+])
+def test_parse_run_name_noaug(name, backbone, last_blocks, wsa, augmented):
+    info = F.parse_run_name(name)
+    assert info is not None
+    assert info.backbone == backbone
+    assert info.method == f"ft_lb{last_blocks}"
+    assert info.last_blocks == last_blocks
+    assert info.wsa is wsa
+    assert info.augmented is augmented
+
+
+@pytest.mark.parametrize("name,backbone,method", [
+    ("dinov2_vits14_baseline", "dinov2_vits14", "baseline"),
+    ("dinov2_vitl14_ft_lb2", "dinov2_vitl14", "ft_lb2"),
+    ("dinov3_vits16_baseline", "dinov3_vits16", "baseline"),
+    ("dinov3_vitl16_lora_lb1", "dinov3_vitl16", "lora_lb1"),
+    ("sam_vit_l_baseline", "sam_vit_l", "baseline"),
+    ("sam_vit_l_ft_lb4", "sam_vit_l", "ft_lb4"),
+])
+def test_parse_run_name_size_variants(name, backbone, method):
+    info = F.parse_run_name(name)
+    assert info is not None
+    assert info.backbone == backbone
+    assert info.method == method
+
+
 # ---------------------------------------------------------------------------
 # Loading exports
 # ---------------------------------------------------------------------------

@@ -11,32 +11,28 @@ from typing import Any, Dict, Optional, Sequence, Tuple, Union
 import torch.nn as nn
 
 from models.common.vit_intermediate import extract_intermediate_dense_grid
-from models.dinov3.hub_loader import dinov3_vitb16
+from models.dinov3.hub_loader import dinov3_vits16, dinov3_vitb16, dinov3_vitl16
 
 
-def build_dinov3_vit_b16(
-    *,
-    pretrained: bool = True,
-    weights_path: Optional[str] = None,
-) -> nn.Module:
-    """
-    Build DINOv3 ViT-B/16 (patch size 16).
-
-    Parameters
-    ----------
-    pretrained:
-        If ``True`` and ``weights_path`` is ``None``, uses the official hub URL.
-    weights_path:
-        Optional local checkpoint path forwarded to the hub loader as ``weights=``.
-
-    Returns
-    -------
-    torch.nn.Module
-        A DINOv3 ViT backbone module.
-    """
+def _build_dinov3(loader_fn, *, pretrained: bool = True, weights_path: Optional[str] = None) -> nn.Module:
     if weights_path is not None:
-        return dinov3_vitb16(pretrained=True, weights=weights_path)
-    return dinov3_vitb16(pretrained=pretrained)
+        return loader_fn(pretrained=True, weights=weights_path)
+    return loader_fn(pretrained=pretrained)
+
+
+def build_dinov3_vit_s16(*, pretrained: bool = True, weights_path: Optional[str] = None) -> nn.Module:
+    """Build DINOv3 ViT-S/16."""
+    return _build_dinov3(dinov3_vits16, pretrained=pretrained, weights_path=weights_path)
+
+
+def build_dinov3_vit_b16(*, pretrained: bool = True, weights_path: Optional[str] = None) -> nn.Module:
+    """Build DINOv3 ViT-B/16."""
+    return _build_dinov3(dinov3_vitb16, pretrained=pretrained, weights_path=weights_path)
+
+
+def build_dinov3_vit_l16(*, pretrained: bool = True, weights_path: Optional[str] = None) -> nn.Module:
+    """Build DINOv3 ViT-L/16."""
+    return _build_dinov3(dinov3_vitl16, pretrained=pretrained, weights_path=weights_path)
 
 
 def extract_dense_grid_dinov3(
@@ -46,25 +42,7 @@ def extract_dense_grid_dinov3(
     layer_indices: Union[int, Sequence[int]] = 4,
     reshape: bool = True,
 ) -> Tuple[torch.Tensor, Dict[str, Any]]:
-    """
-    Extract dense features from a DINOv3 ViT using ``get_intermediate_layers``.
-
-    Parameters
-    ----------
-    model:
-        A DINOv3 ``DinoVisionTransformer``-compatible module.
-    x_imagenet:
-        ``(B, 3, H, W)`` ImageNet-normalized batch.
-    layer_indices:
-        Passed through to ``get_intermediate_layers``.
-    reshape:
-        Request feature maps reshaped to ``(B, C, Hf, Wf)``.
-
-    Returns
-    -------
-    tuple[torch.Tensor, dict]
-        Fused L2-normalized features and metadata.
-    """
+    """Extract dense features from a DINOv3 ViT using ``get_intermediate_layers``."""
     if not hasattr(model, "get_intermediate_layers"):
         raise TypeError("Expected a DINOv3 ViT module with `get_intermediate_layers`.")
     return extract_intermediate_dense_grid(
@@ -75,4 +53,9 @@ def extract_dense_grid_dinov3(
     )
 
 
-__all__ = ["build_dinov3_vit_b16", "extract_dense_grid_dinov3"]
+__all__ = [
+    "build_dinov3_vit_s16",
+    "build_dinov3_vit_b16",
+    "build_dinov3_vit_l16",
+    "extract_dense_grid_dinov3",
+]

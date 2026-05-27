@@ -95,4 +95,20 @@ def dinov2_vitb14(*, pretrained: bool = True, weights: Union[Weights, str] = Wei
     return _make_dinov2_model(arch_name="vit_base", pretrained=pretrained, weights=weights, **kwargs)
 
 
-__all__ = ["Weights", "dinov2_vitb14", "convert_path_or_url_to_url"]
+def dinov2_vits14(*, pretrained: bool = True, weights: Union[Weights, str] = Weights.LVD142M, **kwargs):
+    """DINOv2 ViT-S/14 (LVD-142M or local / URL weights)."""
+    return _make_dinov2_model(arch_name="vit_small", pretrained=pretrained, weights=weights, **kwargs)
+
+
+def dinov2_vitl14(*, pretrained: bool = True, weights: Union[Weights, str] = Weights.LVD142M, **kwargs):
+    """DINOv2 ViT-L/14 (LVD-142M or local / URL weights)."""
+    return _make_dinov2_model(arch_name="vit_large", pretrained=pretrained, weights=weights, **kwargs)
+
+
+__all__ = [
+    "Weights",
+    "convert_path_or_url_to_url",
+    "dinov2_vitb14",
+    "dinov2_vits14",
+    "dinov2_vitl14",
+]

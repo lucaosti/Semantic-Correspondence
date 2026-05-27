@@ -1,4 +1,4 @@
-"""SPair-71k PCK evaluation runner.
+"""PCK evaluation runner supporting SPair-71k, PF-Willow, and PF-Pascal.
 
 Use :class:`EvalRunSpec` to describe a single run; :func:`run_spair_pck_eval` returns
 the metric dictionaries used for logging, JSON exports and comparison tables.
@@ -7,11 +7,18 @@ Runs in ``torch.inference_mode`` with bf16 autocast on CUDA Ampere+. Forward ove
 ``src`` and ``tgt`` is fused into a single ``extractor(cat([src, tgt]))``, the
 matcher is fully batched (one ``grid_sample`` + one ``einsum`` per batch), and PCK
 aggregation is computed in-house — no SD4Match dependency.
+
+Dataset selection is controlled by :attr:`EvalRunSpec.dataset`:
+
+* ``"spair"`` (default) — SPair-71k; uses :func:`data.paths.resolve_spair_root`.
+* ``"pf_willow"`` — PF-Willow; uses :func:`data.paths.resolve_pf_willow_root`.
+* ``"pf_pascal"`` — PF-Pascal; uses :func:`data.paths.resolve_pf_pascal_root`.
 """
 
 from __future__ import annotations
 
 import contextlib
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -20,8 +27,10 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
+from torch.utils.data import Dataset as _Dataset
+
 from data.dataset import PreprocessMode, SPair71kPairDataset, spair_collate_fn
-from data.paths import resolve_spair_root
+from data.paths import resolve_pf_pascal_root, resolve_pf_willow_root, resolve_spair_root
 from evaluation.checkpoint_loader import load_encoder_weights_from_pt
 from models.common.dense_extractor import BackboneName, DenseExtractorConfig, DenseFeatureExtractor
 from models.common.window_soft_argmax import refine_predictions_window_soft_argmax
@@ -56,31 +65,70 @@ class EvalRunSpec:
     num_workers: int = 4
     batch_size: int = 8
     dino_layer_indices: Any = field(default_factory=lambda: 4)
+    # Dataset selection: "spair" | "pf_willow" | "pf_pascal"
+    dataset: str = "spair"
+    # Explicit root for PF-Willow / PF-Pascal (None = auto-resolve via env / repo default)
+    dataset_root: Optional[str] = None
 
     def to_dense_config(self) -> DenseExtractorConfig:
+        bname = self.backbone
+        if bname.startswith("dinov2"):
+            wp = self.dinov2_weights
+        elif bname.startswith("dinov3"):
+            wp = self.dinov3_weights
+        else:
+            wp = self.sam_checkpoint
         return DenseExtractorConfig(
-            name=BackboneName(self.backbone),
-            dinov2_weights_path=self.dinov2_weights,
-            dinov3_weights_path=self.dinov3_weights,
-            sam_checkpoint_path=self.sam_checkpoint,
+            name=BackboneName(bname),
+            weights_path=wp,
             dino_layer_indices=self.dino_layer_indices,
         )
 
 
-def _build_eval_dataset(spec: EvalRunSpec, spair_root: str) -> SPair71kPairDataset:
+def _build_eval_dataset(spec: EvalRunSpec, spair_root: str) -> _Dataset:
+    """Instantiate the dataset specified by ``spec.dataset``."""
     mode = PreprocessMode[str(spec.preprocess).strip().upper()]
+    size_hw = (int(spec.height), int(spec.width))
+
+    if spec.dataset == "pf_willow":
+        from data.pf_dataset import PFWillowPairDataset
+
+        root = resolve_pf_willow_root(spec.dataset_root)
+        return PFWillowPairDataset(
+            pf_willow_root=root,
+            split=spec.split,
+            preprocess=mode,
+            output_size_hw=size_hw,
+            normalize=True,
+            photometric_augment=None,
+        )
+
+    if spec.dataset == "pf_pascal":
+        from data.pf_dataset import PFPascalPairDataset
+
+        root = resolve_pf_pascal_root(spec.dataset_root)
+        return PFPascalPairDataset(
+            pf_pascal_root=root,
+            split=spec.split,
+            preprocess=mode,
+            output_size_hw=size_hw,
+            normalize=True,
+            photometric_augment=None,
+        )
+
+    # Default: SPair-71k
     return SPair71kPairDataset(
         spair_root=spair_root,
         split=spec.split,
         preprocess=mode,
-        output_size_hw=(int(spec.height), int(spec.width)),
+        output_size_hw=size_hw,
         normalize=True,
         photometric_augment=None,
     )
 
 
 def _build_eval_loader(
-    dataset: SPair71kPairDataset,
+    dataset: _Dataset,
     *,
     batch_size: int,
     num_workers: int,
@@ -169,7 +217,12 @@ def run_spair_pck_eval(
     per-point), ``spec``, ``sd4match_per_image`` / ``per_point`` / ``summary`` and a
     summary-only ``sd4match_by_difficulty_flag``.
     """
-    root = resolve_spair_root(spair_root)
+    if spec.dataset == "pf_willow":
+        root = resolve_pf_willow_root(spec.dataset_root or spair_root)
+    elif spec.dataset == "pf_pascal":
+        root = resolve_pf_pascal_root(spec.dataset_root or spair_root)
+    else:
+        root = resolve_spair_root(spair_root or spec.dataset_root)
     eval_device = device if device is not None else torch.device(recommended_device_str())
     pin_mem = pin_memory_for(eval_device)
     alphas_t = torch.tensor([float(a) for a in alphas], device=eval_device)
@@ -203,8 +256,21 @@ def run_spair_pck_eval(
         for f in _DIFFICULTY_FLAGS
     }
 
+    _WARMUP_BATCHES = 3
+    _TIMING_BATCHES = 10
+    if eval_device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(eval_device)
+    _batch_idx = 0
+    _t0: Optional[float] = None
+    _t1: Optional[float] = None
+    _timing_images = 0
+
     with torch.inference_mode(), _autocast_eval(eval_device):
         for batch in loader:
+            if _batch_idx == _WARMUP_BATCHES:
+                if eval_device.type == "cuda":
+                    torch.cuda.synchronize(eval_device)
+                _t0 = time.perf_counter()
             src = batch["src_img"].to(eval_device, non_blocking=pin_mem)
             tgt = batch["tgt_img"].to(eval_device, non_blocking=pin_mem)
             src_kps = batch["src_kps"].to(eval_device)
@@ -251,6 +317,14 @@ def run_spair_pck_eval(
             correct_all = (dists.unsqueeze(0) <= alphas_t.view(-1, 1, 1) * pckthres.view(1, -1, 1)).cpu()
             n_valid_list = n_valid.cpu().tolist()
 
+            if _t0 is not None and _batch_idx < _WARMUP_BATCHES + _TIMING_BATCHES:
+                _timing_images += bsz
+                if _batch_idx == _WARMUP_BATCHES + _TIMING_BATCHES - 1:
+                    if eval_device.type == "cuda":
+                        torch.cuda.synchronize(eval_device)
+                    _t1 = time.perf_counter()
+            _batch_idx += 1
+
             diff_buckets = [
                 [(_flag_at(batch, f, b)) for f in _DIFFICULTY_FLAGS] for b in range(bsz)
             ]
@@ -273,6 +347,18 @@ def run_spair_pck_eval(
                             continue
                         diff_image[flag][bucket][key].append(img_pck)
                         diff_point[flag][bucket][key].extend(float(p) for p in cb)
+
+    if eval_device.type == "cuda":
+        torch.cuda.synchronize(eval_device)
+    _throughput = float("nan")
+    if _t0 is not None and _timing_images > 0:
+        _end = _t1 if _t1 is not None else time.perf_counter()
+        _elapsed = _end - _t0
+        if _elapsed > 0:
+            _throughput = _timing_images / _elapsed
+    _peak_mb = float("nan")
+    if eval_device.type == "cuda":
+        _peak_mb = torch.cuda.max_memory_allocated(eval_device) / 1e6
 
     def _mean(xs: List[float]) -> float:
         return float(sum(xs) / len(xs)) if xs else float("nan")
@@ -299,10 +385,15 @@ def run_spair_pck_eval(
 
     out: Dict[str, Any] = {
         "name": spec.name,
-        "spair_root": root,
+        "dataset": spec.dataset,
+        "dataset_root": root,
+        # Keep "spair_root" for backward compatibility with analysis notebooks.
+        "spair_root": root if spec.dataset == "spair" else None,
         "metrics": metrics,
         "spec": asdict(spec),
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "throughput_img_per_sec": _throughput,
+        "peak_memory_mb": _peak_mb,
         "sd4match_per_image": image_acc,
         "sd4match_per_point": point_acc,
         "sd4match_summary": {"image": summary_image, "point": summary_point},
