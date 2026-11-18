@@ -1,12 +1,3 @@
 \begin{abstract}
-Establishing pixel-level semantic correspondences across images with extreme variations in viewpoint, scale, and appearance remains a fundamental challenge in computer vision. This report systematically investigates the dense matching capabilities of modern Visual Foundation Models (VFMs)—specifically DINOv2, DINOv3, and the Segment Anything Model (SAM)—evaluated on the highly challenging SPair-71k benchmark.
-
-Our study follows a structured, multi-stage pipeline:
-\begin{itemize}
-    \item \textbf{Training-Free Baseline:} Zero-shot dense feature matching utilizing cosine similarity and standard argmax.
-    \item \textbf{Light Fine-Tuning \& PEFT:} Task-specific adaptation of the latest ViT blocks, exploring efficient strategies like Low-Rank Adaptation (LoRA).
-    \item \textbf{Inference Refinement:} Replacement of discrete argmax with Windowed Soft-Argmax to achieve sub-pixel accuracy and robustness against local noise.
-\end{itemize}
-
-By evaluating the Percentage of Correct Keypoints (PCK) across multiple precision thresholds, we provide a comprehensive analysis of the trade-offs between zero-shot generalization, fine-tuned accuracy, and computational efficiency. Cross-dataset evaluation on PF-Willow and PF-Pascal confirms that the learned representations generalize beyond the training distribution.
+Semantic correspondence asks for the location, in a target image, of each annotated part of an object in a source image, across instances that differ in appearance, viewpoint and scale. We study how far the dense features of three Visual Foundation Models, DINOv2, DINOv3 and the Segment Anything Model (SAM), carry this task on SPair-71k, and how cheaply they can be adapted to it. Frozen last-block features matched by cosine similarity already reach $53.2$ PCK@0.1 with DINOv2, in line with published zero-shot numbers, while SAM stays at $22.2$. Fine-tuning the last two blocks with a Gaussian cross-entropy objective raises DINOv2 to $83.4$, and a Windowed Soft-Argmax at inference, tuned on the validation split, lifts it to $84.9$ ($71.7$ at the stricter $\alpha{=}0.05$). Low-Rank Adaptation of the MLPs of the last four blocks recovers about $80\%$ of this gain with $0.25$\,M trainable parameters instead of $14.2$\,M. On SPair-71k the ranking DINOv2 $>$ DINOv3 $\gg$ SAM holds for every adaptation setting, and the SPair-trained models also improve on PF-Willow without retraining.
 \end{abstract}

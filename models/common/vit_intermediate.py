@@ -49,7 +49,7 @@ def extract_intermediate_dense_grid(
     model: nn.Module,
     x_imagenet: torch.Tensor,
     *,
-    layer_indices: Union[int, Sequence[int]] = 4,
+    layer: int = -1,
     reshape: bool = True,
 ) -> Tuple[torch.Tensor, Dict[str, Any]]:
     """
@@ -63,8 +63,10 @@ def extract_intermediate_dense_grid(
         A ViT module exposing ``get_intermediate_layers`` (e.g., official DINO checkpoints).
     x_imagenet:
         ``(B, 3, H, W)`` batch in **ImageNet-normalized** space.
-    layer_indices:
-        Either an ``int`` (last ``n`` blocks) or an explicit list of block indices.
+    layer:
+        Index of the single transformer block whose (final-norm) output is returned;
+        negative values count from the end (``-1`` = last block). The DINO API reads a
+        bare ``int`` as "the last n blocks", so the index is always passed as a list.
     reshape:
         If ``True``, returns ``(B, C, Hf, Wf)`` feature maps.
 
@@ -76,14 +78,18 @@ def extract_intermediate_dense_grid(
     if not hasattr(model, "get_intermediate_layers"):
         raise TypeError("Expected a ViT module with `get_intermediate_layers`.")
 
+    n_blocks = len(model.blocks)
+    if not -n_blocks <= int(layer) < n_blocks:
+        raise ValueError(f"layer {layer} out of range for a {n_blocks}-block ViT")
+    block_idx = int(layer) % n_blocks
     outputs = model.get_intermediate_layers(
         x_imagenet,
-        n=layer_indices,
+        n=[block_idx],
         reshape=reshape,
         return_class_token=False,
         norm=True,
     )
     feats: List[torch.Tensor] = [t.float() for t in outputs]
     fused, meta = fuse_layer_features(feats, fusion="mean_l2norm")
-    meta["layer_indices"] = layer_indices
+    meta["layer"] = block_idx
     return fused, meta

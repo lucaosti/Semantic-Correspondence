@@ -50,10 +50,19 @@ def test_dense_extractor_dinov2_random_init():
     encoder = build_dinov2_vit_b14(pretrained=False).eval()
     x = torch.randn(1, 3, 224, 224)
     with torch.no_grad():
-        feats, meta = extract_dinov2(encoder, x, layer_indices=4, reshape=True)
+        feats, meta = extract_dinov2(encoder, x, layer=-1, reshape=True)
+        feats_l3, meta_l3 = extract_dinov2(encoder, x, layer=3, reshape=True)
+        ref_last = encoder.get_intermediate_layers(x, n=[11], reshape=True, norm=True)[0]
+        ref_l3 = encoder.get_intermediate_layers(x, n=[3], reshape=True, norm=True)[0]
     assert feats.ndim == 4
     norms = feats.norm(dim=1)
     assert torch.allclose(norms, torch.ones_like(norms), atol=1e-4)
+    # Regression: an int used to mean "average of the last n blocks"; now it is one block.
+    assert meta["layer"] == 11 and meta_l3["layer"] == 3
+    assert torch.allclose(feats, torch.nn.functional.normalize(ref_last, dim=1), atol=1e-5)
+    assert torch.allclose(feats_l3, torch.nn.functional.normalize(ref_l3, dim=1), atol=1e-5)
+    with pytest.raises(ValueError):
+        extract_dinov2(encoder, x, layer=12)
 
 
 @pytest.mark.skipif(not DINOV3_WEIGHTS.is_file(), reason="DINOv3 weights not downloaded")

@@ -67,14 +67,14 @@ class DenseExtractorConfig:
         For DINOv2/DINOv3, pass the ``.pth`` file path; for SAM, pass the full SAM
         checkpoint (``image_encoder.*`` keys are extracted automatically).
         If ``None``, weights are loaded from the official hub URL (downloaded once).
-    dino_layer_indices:
-        ``n`` (last-n blocks) or explicit block indices for DINO ``get_intermediate_layers``.
-        Ignored for SAM backbones.
+    dino_layer:
+        Index of the DINO block used as dense features (``-1`` = last block).
+        Ignored for SAM backbones, whose features are the image-encoder neck output.
     """
 
     name: BackboneName
     weights_path: Optional[str] = None
-    dino_layer_indices: Union[int, Sequence[int]] = 4
+    dino_layer: int = -1
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +178,7 @@ class DenseFeatureExtractor(nn.Module):
         feats, meta = extract_dense_grid_dinov2(
             self.encoder,
             x_imagenet,
-            layer_indices=self.cfg.dino_layer_indices,
+            layer=self.cfg.dino_layer,
             reshape=True,
         )
         meta["backbone"] = self.backbone_name.value
@@ -191,7 +191,7 @@ class DenseFeatureExtractor(nn.Module):
         feats, meta = extract_dense_grid_dinov3(
             self.encoder,
             x_imagenet,
-            layer_indices=self.cfg.dino_layer_indices,
+            layer=self.cfg.dino_layer,
             reshape=True,
         )
         meta["backbone"] = self.backbone_name.value

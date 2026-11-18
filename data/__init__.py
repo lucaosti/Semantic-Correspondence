@@ -30,7 +30,6 @@ from .dataset import (
 )
 from .pf_dataset import (
     PF_PASCAL_CATEGORIES,
-    PF_WILLOW_CATEGORIES,
     PFPascalPairDataset,
     PFWillowPairDataset,
 )
@@ -56,7 +55,6 @@ __all__ = [
     "spair_split_filename",
     # PF datasets
     "PF_PASCAL_CATEGORIES",
-    "PF_WILLOW_CATEGORIES",
     "PFPascalPairDataset",
     "PFWillowPairDataset",
 ]

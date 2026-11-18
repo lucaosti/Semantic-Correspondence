@@ -1,0 +1,37 @@
+\begin{table*}[t]
+\centering
+\caption{PCK (\%) on the SPair-71k test split, averaged per image. FT: fine-tuning of the last $N$ blocks; LoRA: rank-8 adapters on the MLPs of the last $N$ blocks; WSA: window soft-argmax with $(w,\tau)$ selected on the validation split. Bold: best per backbone and column.}
+\label{tab:main}
+\small
+\begin{tabular}{llcr ccc ccc}
+\toprule
+ & & & Trainable & \multicolumn{3}{c}{Argmax} & \multicolumn{3}{c}{WSA} \\
+\cmidrule(lr){5-7}\cmidrule(lr){8-10}
+Backbone & Method & $N$ & params & @0.05 & @0.1 & @0.2 & @0.05 & @0.1 & @0.2 \\
+\midrule
+\multirow{7}{*}{DINOv2} & Frozen & -- & 0 & 36.8 & 53.2 & 68.4 & 37.7 & 55.3 & 69.7 \\
+ & FT & 1 & 7.1M & 63.2 & 80.4 & 89.9 & 67.8 & 82.4 & 90.7 \\
+ & FT & 2 & 14.2M & \textbf{67.6} & \textbf{83.4} & \textbf{91.1} & \textbf{71.7} & \textbf{84.9} & \textbf{91.8} \\
+ & FT & 4 & 28.4M & 66.8 & 79.8 & 86.9 & 70.6 & 80.9 & 87.4 \\
+ & LoRA & 1 & 61K & 53.8 & 71.6 & 83.5 & 58.2 & 74.3 & 84.5 \\
+ & LoRA & 2 & 123K & 56.0 & 74.0 & 85.6 & 60.5 & 76.8 & 86.5 \\
+ & LoRA & 4 & 246K & 61.6 & 77.4 & 85.9 & 66.4 & 79.2 & 86.4 \\
+\midrule
+\multirow{7}{*}{DINOv3} & Frozen & -- & 0 & 32.4 & 47.8 & 61.8 & 32.8 & 49.2 & 62.6 \\
+ & FT & 1 & 7.1M & 57.3 & 77.1 & 88.3 & 62.6 & 79.1 & 88.8 \\
+ & FT & 2 & 14.2M & 60.9 & \textbf{79.0} & \textbf{88.6} & 65.6 & \textbf{80.5} & \textbf{88.9} \\
+ & FT & 4 & 28.4M & \textbf{62.8} & 78.3 & 86.9 & \textbf{67.3} & 79.4 & 87.1 \\
+ & LoRA & 1 & 61K & 47.6 & 67.4 & 80.6 & 51.6 & 69.3 & 81.2 \\
+ & LoRA & 2 & 123K & 53.9 & 73.5 & 85.4 & 59.2 & 75.4 & 85.8 \\
+ & LoRA & 4 & 246K & 57.8 & 75.4 & 85.1 & 62.7 & 76.8 & 85.4 \\
+\midrule
+\multirow{7}{*}{SAM} & Frozen & -- & 0 & 14.1 & 22.2 & 35.5 & 13.5 & 22.7 & 35.9 \\
+ & FT & 1 & 7.1M & 32.1 & 44.1 & 57.2 & 33.7 & 45.4 & 57.7 \\
+ & FT & 2 & 14.2M & 31.1 & 43.6 & 56.2 & 33.2 & 44.7 & 56.4 \\
+ & FT & 4 & 28.4M & \textbf{34.8} & \textbf{47.1} & \textbf{58.5} & \textbf{36.9} & \textbf{47.4} & \textbf{58.6} \\
+ & LoRA & 1 & 61K & 29.5 & 40.3 & 54.0 & 30.5 & 42.0 & 54.7 \\
+ & LoRA & 2 & 123K & 31.0 & 43.0 & 55.4 & 32.8 & 44.3 & 55.9 \\
+ & LoRA & 4 & 246K & 32.4 & 44.3 & 56.2 & 34.4 & 45.4 & 56.5 \\
+\bottomrule
+\end{tabular}
+\end{table*}

@@ -300,3 +300,26 @@ def test_fingerprint_includes_lora_last_blocks_list(monkeypatch):
     payload = rp._fingerprint_payload()
     assert "LORA_LAST_BLOCKS_LIST" in payload
     assert sorted(payload["LORA_LAST_BLOCKS_LIST"]) == [1, 2, 4]
+
+
+def test_write_train_commands_lists_every_run_with_effective_batch_20(tmp_path):
+    import shlex
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    out = tmp_path / "cmds.txt"
+    subprocess.run(
+        [sys.executable, "scripts/run_pipeline.py", "--config", "configs/experiment.yaml",
+         "--write-train-commands", str(out)],
+        cwd=repo, check=True, capture_output=True,
+        env={**__import__("os").environ, "SEMANTIC_CORRESPONDENCE_PIPELINE_LOG_FILE_ONLY": "1"},
+    )
+    cmds = [shlex.split(line) for line in out.read_text().splitlines()]
+    get = lambda a, k: a[a.index(k) + 1]  # noqa: E731
+    assert len(cmds) == 27  # 3 backbones x (3 finetune + 3 finetune no-aug + 3 LoRA)
+    assert [get(a, "--backbone") for a in cmds[:9]] == ["sam_vit_b"] * 9  # longest runs first
+    for a in cmds:
+        assert int(get(a, "--batch-size")) * int(get(a, "--accumulation-steps")) == 20
+        assert get(a, "--resume") == "auto" and get(a, "--dino-layer") == "-1"

@@ -1,23 +1,21 @@
 \section{Introduction}
 \label{sec:intro}
 
-\begin{figure}[ht]
+\begin{figure*}[t]
     \centering
-    \includegraphics[width=\columnwidth]{img/teaser.png}
-    \caption{Semantic correspondence across domains: matching the left eye of a dog in a photograph to the left eye of a wolf in an illustration.}
+    \includegraphics[width=\textwidth]{img/spair_examples.pdf}
+    \caption{SPair-71k test pairs (source on top, target below) with their ground-truth keypoint matches. Titles give the annotated difficulty: viewpoint (vp), scale (sc), truncation (tr) and occlusion (oc). The matcher must follow parts across instances, poses and clutter, \eg the motorbike carrying three riders in the source and parked next to a standing person in the target.}
     \label{fig:teaser}
-\end{figure}
+\end{figure*}
 
-Semantic correspondence is the complex task of finding pixel-level matches between semantically similar parts of objects across different images. Unlike standard geometric matching, which aligns different views of the same physical scene, semantic matching requires models to inherently understand object similarities despite drastic variations. Objects may appear in entirely different viewpoints, scales, or contexts, and the images themselves may originate from completely different visual domains, such as natural photographs versus artistic paintings. Furthermore, the system must accurately distinguish semantically similar but geometrically distinct parts, such as differentiating a left paw from a right paw.
+Semantic correspondence is the problem of finding, for a keypoint on an object in a source image, the semantically equivalent point on a different instance of the same category in a target image (\cref{fig:teaser}). Unlike stereo or optical flow, the two images do not show the same physical surface: the matcher must abstract over appearance, pose, scale, occlusion and even rendering domain, while still telling apart parts that look alike, such as a left and a right paw.
 
-Recent research demonstrates that large-scale Visual Foundation Models (VFMs) encode rich internal representations that naturally support dense matching tasks. These representations emerge without explicit supervision, offering a highly effective starting point for semantic correspondence.
+Large Visual Foundation Models (VFMs) trained without correspondence labels produce dense features in which semantically similar parts lie close together~\cite{caron2021emerging,oquab2023dinov2,zhang2023tale}. Nearest-neighbour matching on these features is already a strong baseline, and a small amount of supervision on top of them gives the current state of the art~\cite{zhang2024telling}. This raises two practical questions that we answer for three widely used ViT-B backbones, DINOv2~\cite{oquab2023dinov2}, DINOv3~\cite{simeoni2025dinov3} and SAM~\cite{kirillov2023segment}: \emph{how good are their frozen features}, and \emph{how much does a light, cheap adaptation buy}?
 
-The primary goal of this project is to establish pixel-accurate semantic correspondences between a source image with annotated keypoints and a target image, leveraging features extracted from pre-trained visual encoders (DINOv2, DINOv3, and SAM). 
-
-To systematically address and evaluate this task on the SPair-71k benchmark, the project is structured into four main stages:
+We follow a four-stage protocol on SPair-71k~\cite{min2019spair}: (i) training-free matching of frozen features with cosine similarity and argmax; (ii) supervised fine-tuning of the last $N$ transformer blocks; (iii) a Windowed Soft-Argmax (WSA) that refines the discrete argmax to sub-patch precision at inference; and (iv) Low-Rank Adaptation (LoRA)~\cite{hu2022lora} of the same blocks as a parameter-efficient alternative. Every hyperparameter that is chosen from data (the WSA window and temperature, the feature layer, the training checkpoint) is chosen on the validation split; the test split is used once. Our findings are:
 \begin{itemize}
-    \item \textbf{Training-Free Baseline:} Evaluating how well frozen features encode correspondence using cosine similarity and standard argmax.
-    \item \textbf{Light Fine-Tuning:} Unfreezing and adapting the final layers of the backbone with keypoint supervision to enhance matching performance.
-    \item \textbf{Prediction Refinement:} Replacing the discrete argmax operation with a Windowed Soft-Argmax to achieve sub-pixel accuracy and robustness against local noise.
-    \item \textbf{Extension:} Exploring advanced strategies, specifically Parameter-Efficient Fine-Tuning via Low-Rank Adaptation (LoRA).
+    \item Frozen last-block DINOv2 features reach $53.2$ PCK@0.1 (per image), DINOv3 $47.8$ and SAM $22.2$, consistent with published numbers and with three independent student implementations of the same project (\cref{sec:comparison}).
+    \item Fine-tuning two blocks of DINOv2 raises PCK@0.1 to $83.4$; with WSA it reaches $84.9$, on par with GeoAware-SC~\cite{zhang2024telling}, which uses frozen SD+DINOv2 features at higher resolution.
+    \item WSA helps every adapted model, most at the strict threshold ($+3.8$ to $+5.3$ points at $\alpha{=}0.05$ for the DINO models), at no training cost.
+    \item LoRA on four blocks recovers $93\%$ of the gain of fine-tuning the same four blocks with $115\times$ fewer trainable parameters; photometric augmentation has no measurable effect.
 \end{itemize}

@@ -171,8 +171,10 @@ def maybe_compile_model(model: nn.Module, device: torch.device, *, requested: bo
         print(f"{script_tag}: --compile ignored (torch.compile unavailable).", flush=True)
         return model
     try:
-        compiled = torch.compile(model, mode="reduce-overhead")
-        print(f"{script_tag}: torch.compile enabled (mode=reduce-overhead).", flush=True)
+        # Default mode, not reduce-overhead: CUDA graphs reuse output buffers across calls, which
+        # breaks the two forwards (src, tgt) per step and gradient accumulation.
+        compiled = torch.compile(model)
+        print(f"{script_tag}: torch.compile enabled (mode=default).", flush=True)
         return compiled
     except Exception as e:  # noqa: BLE001
         print(f"{script_tag}: torch.compile failed ({e}); continuing without compile.", flush=True)
@@ -217,8 +219,12 @@ def run_gaussian_training_loop(
     and synced once per epoch.
 
     ``accumulation_steps>1`` enables gradient accumulation: the per-batch loss is divided
-    by the step count and the optimizer step / zero-grad are taken every N micro-batches,
-    yielding an effective batch of ``batch_size * accumulation_steps`` without extra VRAM.
+    by the step count and the optimizer step / zero-grad are taken every N micro-batches.
+    All micro-batches have the same size (``drop_last``) and only complete groups are used
+    (the trailing ``n_batches % N`` micro-batches of an epoch are skipped), so every step's
+    gradient equals the gradient of the mean loss over ``batch_size * N`` pairs. Periodic
+    resume checkpoints are written only at group boundaries, so a resume never loses a
+    partially accumulated gradient.
     """
     if accumulation_steps < 1:
         raise ValueError("accumulation_steps must be >= 1")
@@ -265,6 +271,9 @@ def run_gaussian_training_loop(
         **dl_kw,
     )
     n_train_batches = len(train_loader)
+    n_used_batches = (n_train_batches // accumulation_steps) * accumulation_steps
+    if n_used_batches == 0:
+        raise ValueError("Fewer training batches than accumulation_steps.")
 
     resume_skip_remaining = batch_in_epoch
     for epoch in range(full_epochs_done, epochs):
@@ -296,6 +305,8 @@ def run_gaussian_training_loop(
                     break
         accum_count = 0
         for batch_idx, batch in enumerate(train_it, start=skip_batches):
+            if batch_idx >= n_used_batches:
+                break
             if log_batch_interval and batch_idx % log_batch_interval == 0:
                 print(f"  batch {batch_idx}/{n_train_batches}", flush=True)
             batch = {
@@ -307,15 +318,14 @@ def run_gaussian_training_loop(
             with _autocast_ctx(device, precision_mode):
                 loss = step_loss(batch)
             if not torch.isfinite(loss):
-                continue
+                raise FloatingPointError(f"non-finite training loss at epoch {epoch} batch {batch_idx}")
             scaled = loss / accumulation_steps
             if use_grad_scaler:
                 grad_scaler.scale(scaled).backward()
             else:
                 scaled.backward()
             accum_count += 1
-            is_step = accum_count >= accumulation_steps or (batch_idx + 1) == n_train_batches
-            if is_step:
+            if accum_count == accumulation_steps:
                 if use_grad_scaler:
                     grad_scaler.step(optimizer)
                     grad_scaler.update()
@@ -326,7 +336,8 @@ def run_gaussian_training_loop(
             n_batches += 1
             done_in_epoch = batch_idx + 1
             iv = resume_save_interval
-            if iv > 0 and (done_in_epoch % iv == 0 or done_in_epoch == n_train_batches):
+            # Save at the first group boundary at or after every ``iv`` micro-batches.
+            if iv > 0 and accum_count == 0 and (done_in_epoch % iv < accumulation_steps or done_in_epoch == n_used_batches):
                 payload: dict[str, Any] = {
                     "model": model.state_dict(),
                     "optimizer": optimizer.state_dict(),
@@ -359,10 +370,12 @@ def run_gaussian_training_loop(
                 }
                 with _autocast_ctx(device, precision_mode):
                     loss = step_loss(batch)
-                if torch.isfinite(loss):
-                    val_total = val_total + loss.detach()
-                    vn += 1
-        val_loss = (val_total / max(vn, 1)).item()
+                if not torch.isfinite(loss):
+                    raise FloatingPointError(f"non-finite validation loss at epoch {epoch}")
+                n_pairs = int(batch["src_img"].shape[0])
+                val_total = val_total + loss.detach() * n_pairs
+                vn += n_pairs
+        val_loss = (val_total / max(vn, 1)).item()  # mean over validation pairs
 
         suffix = epoch_log_suffix() if epoch_log_suffix else ""
         current_lr = float(optimizer.param_groups[0].get("lr", 0.0))
@@ -384,6 +397,7 @@ def run_gaussian_training_loop(
         if val_loss < best_val:
             best_val = val_loss
             save_best_checkpoint(epoch, val_loss)
+        stop_now = stopper.step(val_loss, epoch)
 
         end_payload: dict[str, Any] = {
             "model": model.state_dict(),
@@ -399,7 +413,7 @@ def run_gaussian_training_loop(
         end_payload.update(extra_payload)
         save_resume_atomic(resume_path, end_payload)
 
-        if stopper.step(val_loss, epoch):
+        if stop_now:
             print(f"Early stopping at epoch {epoch}")
             break
 

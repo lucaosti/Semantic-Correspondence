@@ -47,6 +47,7 @@ class RunInfo:
     last_blocks: Optional[int]
     wsa: bool
     wsa_window: Optional[int] = None
+    wsa_temperature: Optional[float] = None
     layer_index: Optional[int] = None
     augmented: Optional[bool] = None  # None for baseline; True/False for trained methods
     lora_last_blocks: Optional[int] = None  # set for lora_lbN methods
@@ -66,9 +67,10 @@ def parse_run_name(name: str) -> Optional[RunInfo]:
     bb = m.group("bb")
     rest = m.group("rest")
 
-    m_wsa_sweep = re.match(r"^baseline_wsa_w(\d+)$", rest)
+    m_wsa_sweep = re.match(r"^baseline_wsa_w(\d+)_t([0-9.e+-]+)$", rest)
     if m_wsa_sweep:
-        return RunInfo(name, bb, "baseline", None, True, wsa_window=int(m_wsa_sweep.group(1)))
+        return RunInfo(name, bb, "baseline", None, True, wsa_window=int(m_wsa_sweep.group(1)),
+                       wsa_temperature=float(m_wsa_sweep.group(2)))
     m_layer = re.match(r"^baseline_layer(\d+)$", rest)
     if m_layer:
         return RunInfo(name, bb, "baseline", None, False, layer_index=int(m_layer.group(1)))
@@ -253,7 +255,7 @@ def dataframe_to_markdown(df: "Any", *, fmt: str = "{:.4f}") -> str:
         if c in metric_cols:
             continue
         out[c] = out[c].map(lambda v: "" if pd.isna(v) else str(v))
-    return out.to_markdown(index=False)
+    return out.to_markdown(index=False, disable_numparse=True)  # keep fixed decimals
 
 
 # ---------------------------------------------------------------------------

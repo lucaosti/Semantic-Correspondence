@@ -1,185 +1,37 @@
+\clearpage
+\appendix
 \section*{Supplementary Material}
+\setcounter{section}{0}
+\renewcommand{\thesection}{S\arabic{section}}
+\renewcommand{\thetable}{S\arabic{table}}
+\renewcommand{\thefigure}{S\arabic{figure}}
+\setcounter{table}{0}
+\setcounter{figure}{0}
 
-\subsection*{Per-Keypoint (Micro) PCK Results}
-\label{sec:supp_micro}
+\section{Per-keypoint results}
+\Cref{tab:main_pt} repeats \cref{tab:main} with PCK averaged over all keypoints of the test split instead of per image. Pairs with many keypoints weigh more, which favours large, well-visible objects; all values are higher by 1.7 to 6.1 points, and every conclusion of the main paper holds unchanged.
 
-Table~\ref{tab:micro_pck} reports per-keypoint (micro) PCK on the SPair-71k test split, complementing the per-image (macro) results in Table~\ref{tab:quantitative_results}. Micro PCK weights each keypoint equally regardless of how many annotated points an image contains, making it more sensitive to frequently occurring keypoints (e.g., eyes, wheels) than macro PCK.
+\input{tab/main_pt}
 
-\begin{table}[ht]
+\section{Per-category results}
+\Cref{fig:per_category} breaks PCK@0.1 down by category. Fine-tuning helps most where frozen DINOv2 is weakest: bus ($44\to96$), train ($54\to96$) and tv ($28\to88$), rigid objects whose front and back, or left and right, look alike. Chair and potted plant stay among the hardest categories for every model. Frozen DINOv3 is ahead of frozen DINOv2 on tv, train and potted plant, the reverse of the overall ranking; after fine-tuning DINOv2 leads in 15 of the 18 categories.
+
+\begin{figure}[h]
     \centering
-    \caption{Per-keypoint (micro) PCK on the SPair-71k test split. WSA = Windowed Soft-Argmax; FT = Fine-Tuned last $N$ blocks (with photometric augmentation).}
-    \label{tab:micro_pck}
-    \resizebox{\columnwidth}{!}{%
-    \begin{tabular}{llcccc}
-        \toprule
-        \textbf{Model} & \textbf{Method} & \textbf{Blocks} & \textbf{PCK@0.05} & \textbf{PCK@0.10} & \textbf{PCK@0.20} \\
-        \midrule
-        \multicolumn{6}{l}{\textit{Training-Free Baseline}} \\
-        DINOv2 (ViT-B) & Baseline (Argmax) & — & 0.201 & 0.299 & 0.411 \\
-        DINOv2 (ViT-B) & Baseline + WSA    & — & 0.205 & 0.301 & 0.413 \\
-        DINOv3 (ViT-B) & Baseline (Argmax) & — & 0.236 & 0.355 & 0.475 \\
-        DINOv3 (ViT-B) & Baseline + WSA    & — & 0.239 & 0.357 & 0.477 \\
-        SAM    (ViT-B) & Baseline (Argmax) & — & 0.155 & 0.242 & 0.379 \\
-        SAM    (ViT-B) & Baseline + WSA    & — & 0.155 & 0.242 & 0.380 \\
-        \midrule
-        \multicolumn{6}{l}{\textit{Light Fine-Tuning (last $N$ blocks)}} \\
-        DINOv2 (ViT-B) & FT (Argmax) & 1 & 0.320 & 0.473 & 0.619 \\
-        DINOv2 (ViT-B) & FT + WSA    & 1 & 0.333 & 0.479 & 0.622 \\
-        DINOv2 (ViT-B) & FT (Argmax) & 2 & 0.292 & 0.485 & 0.656 \\
-        DINOv2 (ViT-B) & FT + WSA    & 2 & 0.329 & \textbf{0.504} & \textbf{0.662} \\
-        DINOv2 (ViT-B) & FT (Argmax) & 4 & 0.163 & 0.324 & 0.517 \\
-        DINOv2 (ViT-B) & FT + WSA    & 4 & 0.207 & 0.352 & 0.529 \\
-        DINOv3 (ViT-B) & FT (Argmax) & 1 & 0.343 & 0.520 & 0.661 \\
-        DINOv3 (ViT-B) & FT + WSA    & 1 & 0.357 & 0.527 & 0.665 \\
-        DINOv3 (ViT-B) & FT (Argmax) & 2 & 0.311 & 0.488 & 0.659 \\
-        DINOv3 (ViT-B) & FT + WSA    & 2 & 0.345 & 0.505 & 0.665 \\
-        DINOv3 (ViT-B) & FT (Argmax) & 4 & 0.215 & 0.385 & 0.567 \\
-        DINOv3 (ViT-B) & FT + WSA    & 4 & 0.256 & 0.411 & 0.579 \\
-        SAM    (ViT-B) & FT (Argmax) & 1 & 0.069 & 0.135 & 0.256 \\
-        SAM    (ViT-B) & FT + WSA    & 1 & 0.073 & 0.138 & 0.257 \\
-        SAM    (ViT-B) & FT (Argmax) & 2 & 0.062 & 0.115 & 0.215 \\
-        SAM    (ViT-B) & FT + WSA    & 2 & 0.067 & 0.118 & 0.216 \\
-        SAM    (ViT-B) & FT (Argmax) & 4 & 0.061 & 0.112 & 0.212 \\
-        SAM    (ViT-B) & FT + WSA    & 4 & 0.066 & 0.115 & 0.214 \\
-        \midrule
-        \multicolumn{6}{l}{\textit{LoRA (rank 8, $\alpha{=}16$, last $N$ blocks)}} \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 1 & 0.277 & 0.411 & 0.550 \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 1 & 0.287 & 0.415 & 0.553 \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 2 & 0.291 & 0.438 & 0.587 \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 2 & 0.311 & 0.449 & 0.593 \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 4 & 0.143 & 0.289 & 0.478 \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 4 & 0.170 & 0.312 & 0.489 \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 1 & 0.300 & 0.452 & 0.599 \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 1 & 0.308 & 0.458 & 0.603 \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 2 & 0.339 & 0.500 & 0.651 \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 2 & \textbf{0.357} & 0.511 & 0.656 \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 4 & 0.173 & 0.332 & 0.518 \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 4 & 0.208 & 0.358 & 0.529 \\
-        SAM    (ViT-B) & LoRA (Argmax) & 1 & 0.089 & 0.164 & 0.297 \\
-        SAM    (ViT-B) & LoRA + WSA    & 1 & 0.092 & 0.167 & 0.298 \\
-        SAM    (ViT-B) & LoRA (Argmax) & 2 & 0.041 & 0.086 & 0.178 \\
-        SAM    (ViT-B) & LoRA + WSA    & 2 & 0.046 & 0.089 & 0.181 \\
-        SAM    (ViT-B) & LoRA (Argmax) & 4 & 0.046 & 0.090 & 0.183 \\
-        SAM    (ViT-B) & LoRA + WSA    & 4 & 0.048 & 0.093 & 0.186 \\
-        \bottomrule
-    \end{tabular}
-    }
-\end{table}
-
-\subsection*{Per-Category PCK Results}
-\label{sec:supp_category}
-
-Figure~\ref{fig:per_category_supp} shows PCK@0.20 broken down by SPair-71k object category for all configurations. Rigid, texturally distinctive categories (bus, bottle, car, aeroplane) achieve the highest correspondence accuracy. Articulated or texture-poor categories (person, horse, cow) are consistently harder across all backbones and adaptation strategies. The category ranking is stable across methods, confirming that category difficulty is driven primarily by intrinsic shape variability rather than the choice of backbone or adaptation strategy.
-
-\begin{figure}[!htbp]
-    \centering
-    \includegraphics[width=0.78\columnwidth]{img/per_category_a0.pdf}
-    \caption{Per-category PCK@0.20 heatmap for all configurations. Rigid categories (bus, bottle, car) achieve higher accuracy; articulated categories (person, horse, cow) are harder across all methods.}
-    \label{fig:per_category_supp}
+    \includegraphics[width=\columnwidth]{img/per_category_a0.pdf}
+    \caption{Per-category test PCK@0.1 (\%, per image, WSA) of frozen and best fine-tuned models.}
+    \label{fig:per_category}
 \end{figure}
 
-\ifshowpftables
-\subsection*{Cross-Dataset Generalization: PF-Willow and PF-Pascal}
-\label{sec:supp_pf}
-
-Tables~\ref{tab:pf_willow} and~\ref{tab:pf_pascal} report PCK on PF-Willow and PF-Pascal using the same checkpoints trained on SPair-71k, evaluating zero-shot generalization. SAM was excluded due to GPU memory exhaustion at the larger PF image resolutions with the batch size used ($8$). The relative ordering and depth-collapse patterns observed on SPair-71k replicate on both held-out benchmarks.
-
-\begin{table}[ht]
+\section{Training curves}
+\begin{figure}[h]
     \centering
-    \caption{PCK on the PF-Willow test split (per-image). Checkpoints trained on SPair-71k only. SAM not evaluated (OOM). Best result in each column in \textbf{bold}.}
-    \label{tab:pf_willow}
-    \resizebox{\columnwidth}{!}{%
-    \begin{tabular}{llcccc}
-        \toprule
-        \textbf{Model} & \textbf{Method} & \textbf{Blocks} & \textbf{PCK@0.05} & \textbf{PCK@0.10} & \textbf{PCK@0.20} \\
-        \midrule
-        \multicolumn{6}{l}{\textit{Training-Free Baseline}} \\
-        DINOv2 (ViT-B) & Baseline (Argmax) & — & 0.448 & 0.696 & 0.886 \\
-        DINOv2 (ViT-B) & Baseline + WSA    & — & 0.461 & 0.701 & 0.887 \\
-        DINOv3 (ViT-B) & Baseline (Argmax) & — & 0.505 & 0.758 & 0.910 \\
-        DINOv3 (ViT-B) & Baseline + WSA    & — & 0.515 & 0.762 & 0.910 \\
-        \midrule
-        \multicolumn{6}{l}{\textit{Light Fine-Tuning (last $N$ blocks, with photometric augmentation)}} \\
-        DINOv2 (ViT-B) & FT (Argmax) & 1 & 0.499 & 0.753 & 0.929 \\
-        DINOv2 (ViT-B) & FT + WSA    & 1 & 0.517 & 0.757 & 0.930 \\
-        DINOv2 (ViT-B) & FT (Argmax) & 2 & 0.369 & 0.599 & 0.749 \\
-        DINOv2 (ViT-B) & FT + WSA    & 2 & 0.403 & 0.611 & 0.749 \\
-        DINOv2 (ViT-B) & FT (Argmax) & 4 & 0.163 & 0.301 & 0.469 \\
-        DINOv2 (ViT-B) & FT + WSA    & 4 & 0.189 & 0.312 & 0.474 \\
-        DINOv3 (ViT-B) & FT (Argmax) & 1 & 0.546 & 0.811 & 0.949 \\
-        DINOv3 (ViT-B) & FT + WSA    & 1 & \textbf{0.563} & \textbf{0.817} & \textbf{0.950} \\
-        DINOv3 (ViT-B) & FT (Argmax) & 2 & 0.422 & 0.660 & 0.808 \\
-        DINOv3 (ViT-B) & FT + WSA    & 2 & 0.451 & 0.667 & 0.808 \\
-        DINOv3 (ViT-B) & FT (Argmax) & 4 & 0.284 & 0.479 & 0.673 \\
-        DINOv3 (ViT-B) & FT + WSA    & 4 & 0.320 & 0.498 & 0.675 \\
-        \midrule
-        \multicolumn{6}{l}{\textit{LoRA (rank 8, $\alpha{=}16$, last $N$ blocks)}} \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 1 & 0.476 & 0.731 & 0.915 \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 1 & 0.495 & 0.738 & 0.916 \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 2 & 0.425 & 0.660 & 0.832 \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 2 & 0.449 & 0.671 & 0.833 \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 4 & 0.176 & 0.353 & 0.562 \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 4 & 0.200 & 0.364 & 0.566 \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 1 & 0.522 & 0.783 & 0.934 \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 1 & 0.540 & 0.790 & 0.936 \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 2 & 0.487 & 0.714 & 0.878 \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 2 & 0.507 & 0.721 & 0.879 \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 4 & 0.261 & 0.501 & 0.745 \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 4 & 0.303 & 0.521 & 0.746 \\
-        \bottomrule
-    \end{tabular}
-    }
-\end{table}
+    \includegraphics[width=\columnwidth]{img/training_curves.pdf}
+    \caption{Training and validation loss per epoch for the best fine-tuning and LoRA configuration of each backbone. The validation loss is lowest after the first epoch (second for SAM FT $N{=}4$ and DINOv2 LoRA $N{=}4$) and early stopping ends training seven epochs later.}
+    \label{fig:training_curves}
+\end{figure}
 
-\begin{table}[ht]
-    \centering
-    \caption{PCK on the PF-Pascal test split (per-image). Checkpoints trained on SPair-71k only. SAM not evaluated (OOM). Best result in each column in \textbf{bold}.}
-    \label{tab:pf_pascal}
-    \resizebox{\columnwidth}{!}{%
-    \begin{tabular}{llcccc}
-        \toprule
-        \textbf{Model} & \textbf{Method} & \textbf{Blocks} & \textbf{PCK@0.05} & \textbf{PCK@0.10} & \textbf{PCK@0.20} \\
-        \midrule
-        \multicolumn{6}{l}{\textit{Training-Free Baseline}} \\
-        DINOv2 (ViT-B) & Baseline (Argmax) & — & 0.381 & 0.629 & 0.809 \\
-        DINOv2 (ViT-B) & Baseline + WSA    & — & 0.393 & 0.632 & 0.812 \\
-        DINOv3 (ViT-B) & Baseline (Argmax) & — & 0.404 & 0.643 & 0.833 \\
-        DINOv3 (ViT-B) & Baseline + WSA    & — & 0.407 & 0.649 & 0.841 \\
-        \midrule
-        \multicolumn{6}{l}{\textit{Light Fine-Tuning (last $N$ blocks, with photometric augmentation)}} \\
-        DINOv2 (ViT-B) & FT (Argmax) & 1 & 0.412 & 0.670 & 0.845 \\
-        DINOv2 (ViT-B) & FT + WSA    & 1 & 0.435 & 0.676 & 0.847 \\
-        DINOv2 (ViT-B) & FT (Argmax) & 2 & 0.253 & 0.449 & 0.606 \\
-        DINOv2 (ViT-B) & FT + WSA    & 2 & 0.291 & 0.459 & 0.603 \\
-        DINOv2 (ViT-B) & FT (Argmax) & 4 & 0.129 & 0.279 & 0.414 \\
-        DINOv2 (ViT-B) & FT + WSA    & 4 & 0.175 & 0.296 & 0.422 \\
-        DINOv3 (ViT-B) & FT (Argmax) & 1 & 0.420 & 0.676 & 0.857 \\
-        DINOv3 (ViT-B) & FT + WSA    & 1 & \textbf{0.438} & \textbf{0.688} & \textbf{0.861} \\
-        DINOv3 (ViT-B) & FT (Argmax) & 2 & 0.282 & 0.469 & 0.629 \\
-        DINOv3 (ViT-B) & FT + WSA    & 2 & 0.314 & 0.479 & 0.631 \\
-        DINOv3 (ViT-B) & FT (Argmax) & 4 & 0.191 & 0.376 & 0.538 \\
-        DINOv3 (ViT-B) & FT + WSA    & 4 & 0.240 & 0.393 & 0.544 \\
-        \midrule
-        \multicolumn{6}{l}{\textit{LoRA (rank 8, $\alpha{=}16$, last $N$ blocks)}} \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 1 & 0.394 & 0.649 & 0.823 \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 1 & 0.416 & 0.654 & 0.827 \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 2 & 0.339 & 0.557 & 0.730 \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 2 & 0.363 & 0.563 & 0.733 \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 4 & 0.138 & 0.280 & 0.456 \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 4 & 0.161 & 0.299 & 0.461 \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 1 & 0.421 & 0.663 & 0.851 \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 1 & 0.433 & 0.672 & 0.853 \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 2 & 0.374 & 0.590 & 0.750 \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 2 & 0.389 & 0.601 & 0.755 \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 4 & 0.191 & 0.388 & 0.587 \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 4 & 0.234 & 0.402 & 0.590 \\
-        \bottomrule
-    \end{tabular}
-    }
-\end{table}
-\fi % end \ifshowpftables
+\Cref{fig:training_curves} shows the loss curves discussed in \cref{sec:discussion}. The training loss falls mostly during the first epoch and then flattens, while the validation loss rises slowly. SAM's validation loss is much higher than its training loss from the first epoch, consistent with its weaker generalisation across instances.
 
-\subsection*{GitHub Repository}
-\label{sec:repo}
-
-\url{https://github.com/lucaosti/Semantic-Correspondence}
+\section{Implementation and reproducibility}
+The code, the configuration of the reported experiment and the scripts that produce every table and figure are available at \url{https://github.com/lucaosti/Semantic-Correspondence}. All trainings resume exactly after an interruption (model, optimiser and early-stopping state, and the position within the deterministically shuffled epoch), so the reported runs are equivalent to uninterrupted ones. Unit tests cover the coordinate conventions, the loss, the WSA and the equivalence of gradient accumulation with a large batch.

@@ -39,7 +39,7 @@ from models.common.lora import (
 )
 from scripts._training_common import maybe_compile_model, run_gaussian_training_loop
 from training.early_stopping import EarlyStopping
-from training.engine import correspondence_gaussian_loss
+from training.engine import DEFAULT_LOSS_TEMPERATURE, correspondence_gaussian_loss
 from training.unfreeze import (
     collect_trainable_parameter_groups,
     freeze_all,
@@ -92,13 +92,18 @@ def parse_args() -> argparse.Namespace:
                    help="Early-stopping tolerance on validation loss. An epoch counts "
                         "as improvement only if val_loss < best - min_delta. "
                         "0.0 (default) = strict: any improvement resets the counter.")
-    p.add_argument("--layer-indices", type=int, default=4)
+    p.add_argument("--dino-layer", type=int, default=-1,
+                   help="DINO block used as dense features (-1 = last). Must be the last "
+                        "block when training, otherwise trained blocks get no gradient.")
+    p.add_argument("--loss-temperature", type=float, default=DEFAULT_LOSS_TEMPERATURE,
+                   help="Softmax temperature on cosine similarities in the Gaussian CE loss.")
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     p.add_argument("--device", type=str, default=None)
     p.add_argument("--precision", type=str, default="auto",
                    choices=["auto", "fp32", "bf16", "fp16"])
     p.add_argument("--log-batch-interval", type=int, default=100)
-    p.add_argument("--resume", type=str, default=None)
+    p.add_argument("--resume", type=str, default=None,
+                   help="Resume file, or 'auto' to resume from this run's own resume file if present.")
     p.add_argument("--resume-save-interval", type=int, default=100)
     p.add_argument("--compile", action="store_true",
                    help="Try torch.compile on CUDA Ampere+ (silently no-op elsewhere).")
@@ -145,10 +150,14 @@ def main() -> int:
     extractor_cfg = DenseExtractorConfig(
         name=BackboneName(bname),
         weights_path=_weights_path,
-        dino_layer_indices=args.layer_indices,
+        dino_layer=args.dino_layer,
     )
     extractor = DenseFeatureExtractor(extractor_cfg, freeze=True).to(device)
     encoder = extractor.encoder
+    if not bname.startswith("sam") and args.dino_layer % len(encoder.blocks) != len(encoder.blocks) - 1:
+        print("ERROR: training adapts the last blocks, so features must come from the last "
+              "block (--dino-layer -1).", file=sys.stderr)
+        return 2
     apply_accelerator_throughput_tweaks(device)
 
     freeze_all(encoder)
@@ -255,7 +264,9 @@ def main() -> int:
     fwd_extractor = maybe_compile_model(extractor, device, requested=args.compile, script_tag=script_tag)
 
     def _step_loss(batch_tensors: dict) -> torch.Tensor:
-        return correspondence_gaussian_loss(fwd_extractor, batch_tensors)
+        return correspondence_gaussian_loss(
+            fwd_extractor, batch_tensors, temperature=args.loss_temperature
+        )
 
     run_gaussian_training_loop(
         model=extractor,
@@ -274,7 +285,7 @@ def main() -> int:
         pin_memory=pin_memory_for(device),
         log_batch_interval=args.log_batch_interval,
         resume_save_interval=args.resume_save_interval,
-        resume_arg=args.resume,
+        resume_arg=(resume_path if os.path.isfile(resume_path) else None) if args.resume == "auto" else args.resume,
         precision=args.precision,
         script_tag=script_tag,
         collate_fn=spair_collate_fn,

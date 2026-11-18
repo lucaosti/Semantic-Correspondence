@@ -1,0 +1,15 @@
+# Configuration of the reported experiment (scripts/run_pipeline.py --config configs/experiment.yaml).
+# Everything not listed here uses the defaults in scripts/run_pipeline.py.
+paths:
+  spair_root: data/SPair-71k
+  pf_willow_root: data/PF-Willow
+  pf_pascal_root: data/PF-Pascal
+  checkpoint_dir: checkpoints
+finetune:
+  dinov2_weights: checkpoints/dinov2_vitb14_pretrain.pth
+  dinov3_weights: checkpoints/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth
+  sam_checkpoint: checkpoints/sam_vit_b_01ec64.pth
+runtime:
+  device: cuda
+  num_workers: 8  # Linux CUDA servers; on macOS/MPS keep 1
+  resume_save_interval: 1000  # mid-epoch resume points; every epoch end is always saved

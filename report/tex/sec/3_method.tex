@@ -1,25 +1,30 @@
-\section{Methodology}
+\section{Method}
 \label{sec:method}
 
-Our approach to establishing pixel-accurate semantic correspondences is structured into four progressive stages, leveraging the rich internal representations of Visual Foundation Models (VFMs).
+\paragraph{Dense features.}
+Each image is resized to a fixed square resolution and encoded by a ViT-B backbone into a grid of patch descriptors $F\in\mathbb{R}^{H_f\times W_f\times C}$, which we L2-normalise along channels. For DINOv2 (patch 14) we use $518\times518$ inputs and a $37\times37$ grid; for DINOv3 (patch 16) $512\times512$ and $32\times32$. In both cases we take the output of the \emph{last} transformer block after the final LayerNorm; \cref{sec:ablations} shows that earlier blocks are much worse. SAM resizes the $512\times512$ input to $1024\times1024$ internally and we use its 256-channel neck output on a $64\times64$ grid. Pixel and grid coordinates are related by the pixel-centre convention $u_f=(u+\tfrac12)\,W_f/W-\tfrac12$, and predictions are mapped back to the original image before PCK is computed.
 
-\subsection{Phase 1: Training-Free Baseline}
-The baseline relies entirely on the frozen latent representations of pre-trained backbones (DINOv2, DINOv3, and SAM) without gradient updates. For a given pair of source and target images, dense feature maps are extracted from an intermediate ViT layer (layer~4 by default; ablated in Section~\ref{sec:ablations}) and L2-normalized. To match a specific source keypoint, its feature vector is bilinearly sampled from the source feature map at the keypoint's coordinates, then compared via cosine similarity against every patch feature of the target. The predicted match is obtained using a standard, non-differentiable \textit{argmax} operator on the resulting similarity map. To ensure precise alignment, images are resized to a fixed resolution — $518\times518$ for DINOv2 (37 patches of size 14) and $512\times512$ for DINOv3 and SAM (32 patches of size 16). SAM additionally upsamples internally to $1024\times1024$ before encoding; keypoint coordinates are mapped back to the $512\times512$ frame.
+\paragraph{Training-free matching.}
+For a source keypoint $p$ we bilinearly sample its descriptor $d=F^s(p)$ and compute the cosine similarity map $S(q)=\langle d, F^t(q)\rangle$ over all target cells $q$. The prediction is the centre of the best cell, $\hat q=\arg\max_q S(q)$, mapped to pixels.
 
-\subsection{Phase 2: Light Fine-Tuning}
-To improve domain adaptation and correspondence accuracy, we perform supervised fine-tuning by unfreezing only the final layers of the vision encoders, keeping early representation layers frozen. We optimize the network using a Gaussian Cross-Entropy loss. Instead of penalizing all non-exact pixel predictions equally, this loss relaxes the ground truth point into a 2D Gaussian probability distribution, computing the cross-entropy against the predicted softmax probability map. This formulation accounts for the inherent ambiguity in dense matching.
+\paragraph{Window soft-argmax (WSA).}
+The argmax is quantised to the patch grid (14--16 pixels at our resolutions) and ignores the shape of the similarity peak. Following~\cite{zhang2024telling}, we keep the argmax as a robust coarse estimate and refine it inside a $w\times w$ window $\mathcal{W}$ centred on it:
+\begin{equation}
+    \tilde q=\sum_{q\in\mathcal{W}} q\,\frac{\exp(S(q)/\tau)}{\sum_{q'\in\mathcal{W}}\exp(S(q')/\tau)}.
+    \label{eq:wsa}
+\end{equation}
+Cells of the window that fall outside the map get zero weight. Since $S\in[-1,1]$, the temperature $\tau$ must be well below one for the softmax to be peaked. WSA changes only inference; $w$ and $\tau$ are selected per backbone on the validation split (\cref{sec:ablations}).
 
-\subsection{Phase 3: Inference Refinement}
-The standard \textit{argmax} operation locks predictions to discrete patch centers and is highly sensitive to local noise peaks. To achieve sub-pixel accuracy at inference time, we replace it with the Windowed Soft-Argmax (WSA). As illustrated in Figure~\ref{fig:wsa_pipeline}, WSA first identifies the coarse peak via \textit{argmax}, instantiates a small fixed window (e.g., $5 \times 5$) around this peak, and applies a soft-argmax operation exclusively within this local region. This step is applied solely during evaluation and does not affect the training objective.
+\paragraph{Training objective.}
+For supervised adaptation we turn each similarity map into a distribution over target cells, $P(q)=\mathrm{softmax}_q\big(S(q)/T\big)$, and compare it with a Gaussian centred on the ground-truth target keypoint $q^\star$ in grid coordinates, $G(q)\propto\exp\!\big(-\lVert q-q^\star\rVert^2/2\sigma^2\big)$, normalised over the grid. The loss is the cross-entropy
+\begin{equation}
+    \mathcal{L}=-\sum_{q} G(q)\,\log P(q),
+    \label{eq:loss}
+\end{equation}
+averaged over the valid keypoints of a pair and then over the pairs of a batch. We use $\sigma=1$ cell and $T=0.07$: without a temperature the logits are bounded in $[-1,1]$ and the softmax over the $1{,}369$ cells of a DINOv2 grid could put at most about $0.5\%$ of its mass on any cell. The Gaussian target, rather than a one-hot cell, tolerates the sub-cell position of $q^\star$. The same loss is used for both adaptation schemes below.
 
-\begin{figure}[ht]
-    \centering
-    \includegraphics[width=\columnwidth]{img/wsa_pipeline.png}
-    \caption{Overview of the dense matching pipeline and Inference Refinement. The similarity map is processed using a Windowed Soft-Argmax to achieve robust, sub-pixel accurate keypoint predictions.}
-    \label{fig:wsa_pipeline}
-\end{figure}
+\paragraph{Fine-tuning.}
+We unfreeze the last $N\in\{1,2,4\}$ transformer blocks of the image encoder (7.1\,M parameters per block for all three backbones) and keep the rest frozen, so that the low-level, more generic features are preserved.
 
-\subsection{Phase 4: Extensions (Parameter-Efficient Fine-Tuning)}
-As an advanced exploration, we implemented a Parameter-Efficient Fine-Tuning (PEFT) strategy using Low-Rank Adaptation (LoRA). Full fine-tuning of massive vision backbones is computationally expensive and memory-intensive. To mitigate this, LoRA freezes the pre-trained model weights and injects trainable rank-decomposition matrices into the network. 
-
-In our implementation, we applied manual LoRA adapters exclusively to the Multilayer Perceptron (MLP) linear layers of the final Transformer blocks. To study the sensitivity of this approach to adaptation depth, we sweep the number of LoRA-equipped blocks over $N \in \{1, 2, 4\}$, mirroring the fine-tuning depth ablation of Phase~2. This surgical intervention drastically reduces the number of trainable parameters while giving the model enough flexibility to adapt to the semantic correspondence task on the SPair-71k dataset.
+\paragraph{Low-Rank Adaptation.}
+LoRA~\cite{hu2022lora} keeps every pre-trained weight $W_0$ frozen and learns a low-rank update of selected linear layers, $W=W_0+\tfrac{\alpha}{r}BA$ with $A\in\mathbb{R}^{r\times d_{\text{in}}}$, $B\in\mathbb{R}^{d_{\text{out}}\times r}$ and $B$ initialised to zero, so training starts from the pre-trained model. We adapt the two MLP layers of each of the last $N\in\{1,2,4\}$ blocks with $r=8$ and $\alpha=16$, i.e.\ $61{,}440$ parameters per block, $115\times$ fewer than fine-tuning the same block. After training, $BA$ can be merged into $W_0$, so inference cost is unchanged.

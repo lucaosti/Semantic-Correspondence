@@ -32,9 +32,9 @@ class FinetuneConfig:
         Pairs per optimizer step (loss is averaged over the batch). Default matches training CLIs.
     num_workers:
         DataLoader workers (CLI scripts use ``-1`` for host-aware defaults in ``utils.hardware``).
-    dino_layer_indices:
-        Which intermediate ViT layer features to use for DINO backbones (ignored for SAM).
-        Default ``4`` matches training CLI and evaluation defaults.
+    dino_layer:
+        DINO block whose output is used as dense features (``-1`` = last block; ignored
+        for SAM). Matches the training CLI and evaluation defaults.
     precision:
         Precision policy for training (``auto``/``fp32``/``bf16``/``fp16``).
     """
@@ -46,7 +46,7 @@ class FinetuneConfig:
     max_epochs: int = 50
     batch_size: int = 20
     num_workers: int = 1
-    dino_layer_indices: int = 4
+    dino_layer: int = -1
     precision: str = "auto"
 
 
@@ -69,9 +69,9 @@ class LoRAConfig:
         Pairs per optimizer step (loss is averaged over the batch). Default matches training CLIs.
     num_workers:
         DataLoader workers (CLI scripts use ``-1`` for host-aware defaults in ``utils.hardware``).
-    dino_layer_indices:
-        Which intermediate ViT layer features to use for DINO backbones (ignored for SAM).
-        Default ``4`` matches training CLI and evaluation defaults.
+    dino_layer:
+        DINO block whose output is used as dense features (``-1`` = last block; ignored
+        for SAM). Matches the training CLI and evaluation defaults.
     precision:
         Precision policy for training (``auto``/``fp32``/``bf16``/``fp16``).
     """
@@ -83,7 +83,7 @@ class LoRAConfig:
     learning_rate: float = 1e-3
     batch_size: int = 20
     num_workers: int = 1
-    dino_layer_indices: int = 4
+    dino_layer: int = -1
     precision: str = "auto"
 
 

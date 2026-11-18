@@ -39,7 +39,7 @@ def extract_dense_grid_dinov3(
     model: nn.Module,
     x_imagenet: torch.Tensor,
     *,
-    layer_indices: Union[int, Sequence[int]] = 4,
+    layer: int = -1,
     reshape: bool = True,
 ) -> Tuple[torch.Tensor, Dict[str, Any]]:
     """Extract dense features from a DINOv3 ViT using ``get_intermediate_layers``."""
@@ -48,7 +48,7 @@ def extract_dense_grid_dinov3(
     return extract_intermediate_dense_grid(
         model,
         x_imagenet,
-        layer_indices=layer_indices,
+        layer=layer,
         reshape=reshape,
     )
 

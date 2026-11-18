@@ -3,10 +3,15 @@
 Use :class:`EvalRunSpec` to describe a single run; :func:`run_spair_pck_eval` returns
 the metric dictionaries used for logging, JSON exports and comparison tables.
 
-Runs in ``torch.inference_mode`` with bf16 autocast on CUDA Ampere+. Forward over
-``src`` and ``tgt`` is fused into a single ``extractor(cat([src, tgt]))``, the
-matcher is fully batched (one ``grid_sample`` + one ``einsum`` per batch), and PCK
-aggregation is computed in-house — no SD4Match dependency.
+Runs in ``torch.inference_mode``; only the backbone forward uses bf16 autocast (CUDA
+Ampere+), matching and PCK run in fp32. Forward over ``src`` and ``tgt`` is fused into a
+single ``extractor(cat([src, tgt]))`` and the matcher is fully batched.
+
+PCK follows the standard protocol: predictions are mapped from the preprocessed frame
+back to the **original** target image, compared with the original annotations, and a
+keypoint is correct when its error is ``<= alpha * pck_threshold_bbox`` (the dataset's
+normalisation length in that frame). ``pck@a`` is the mean of per-image PCK,
+``pck_pt@a`` the mean over all keypoints.
 
 Dataset selection is controlled by :attr:`EvalRunSpec.dataset`:
 
@@ -32,7 +37,9 @@ from torch.utils.data import Dataset as _Dataset
 from data.dataset import PreprocessMode, SPair71kPairDataset, spair_collate_fn
 from data.paths import resolve_pf_pascal_root, resolve_pf_willow_root, resolve_spair_root
 from evaluation.checkpoint_loader import load_encoder_weights_from_pt
+from models.common.coord_utils import rescale_coords
 from models.common.dense_extractor import BackboneName, DenseExtractorConfig, DenseFeatureExtractor
+from models.common.matching import argmax_to_pixel_xy, sample_descriptors, similarity_maps
 from models.common.window_soft_argmax import refine_predictions_window_soft_argmax
 from utils.hardware import dataloader_extra_kwargs, pin_memory_for, recommended_device_str
 
@@ -57,14 +64,14 @@ class EvalRunSpec:
     checkpoint: Optional[str] = None
     use_window_soft_argmax: bool = False
     wsa_window: int = 5
-    wsa_temperature: float = 1.0
+    wsa_temperature: float = 0.05
     preprocess: str = "FIXED_RESIZE"
     height: int = 784
     width: int = 784
     limit: int = 0
-    num_workers: int = 4
+    num_workers: int = 1
     batch_size: int = 8
-    dino_layer_indices: Any = field(default_factory=lambda: 4)
+    dino_layer: int = -1
     # Dataset selection: "spair" | "pf_willow" | "pf_pascal"
     dataset: str = "spair"
     # Explicit root for PF-Willow / PF-Pascal (None = auto-resolve via env / repo default)
@@ -81,7 +88,7 @@ class EvalRunSpec:
         return DenseExtractorConfig(
             name=BackboneName(bname),
             weights_path=wp,
-            dino_layer_indices=self.dino_layer_indices,
+            dino_layer=self.dino_layer,
         )
 
 
@@ -95,7 +102,7 @@ def _build_eval_dataset(spec: EvalRunSpec, spair_root: str) -> _Dataset:
 
         root = resolve_pf_willow_root(spec.dataset_root)
         return PFWillowPairDataset(
-            pf_willow_root=root,
+            root,
             split=spec.split,
             preprocess=mode,
             output_size_hw=size_hw,
@@ -108,7 +115,7 @@ def _build_eval_dataset(spec: EvalRunSpec, spair_root: str) -> _Dataset:
 
         root = resolve_pf_pascal_root(spec.dataset_root)
         return PFPascalPairDataset(
-            pf_pascal_root=root,
+            root,
             split=spec.split,
             preprocess=mode,
             output_size_hw=size_hw,
@@ -170,38 +177,35 @@ def _autocast_eval(device: torch.device):
     return contextlib.nullcontext()
 
 
-def _batched_match(
-    feat_src: torch.Tensor,
-    feat_tgt: torch.Tensor,
-    src_kps_coord: torch.Tensor,
-    coord_hw: Tuple[int, int],
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Return ``(pred_xy[B, N, 2], sim_maps[B, N, Hf, Wf])`` in the coord frame."""
-    bsz, _, hf, wf = feat_src.shape
-    n_pts = src_kps_coord.shape[1]
-    ch, cw = float(coord_hw[0]), float(coord_hw[1])
+def _predict_batch(
+    feats_src: torch.Tensor,
+    feats_tgt: torch.Tensor,
+    src_kps: torch.Tensor,
+    img_hw: Tuple[int, int],
+    spec: EvalRunSpec,
+) -> torch.Tensor:
+    """Return ``(B, N, 2)`` predicted target points in the preprocessed (dataset) frame."""
+    desc = sample_descriptors(feats_src, src_kps, img_hw)
+    sims = similarity_maps(desc, feats_tgt)  # (B, N, Hf, Wf), fp32
+    if not spec.use_window_soft_argmax:
+        return argmax_to_pixel_xy(sims, img_hw)
+    bsz, n_pts, hf, wf = sims.shape
+    return refine_predictions_window_soft_argmax(
+        sims.reshape(bsz * n_pts, hf, wf),
+        img_hw,
+        window_size=spec.wsa_window,
+        temperature=spec.wsa_temperature,
+    ).reshape(bsz, n_pts, 2)
 
-    xf = (src_kps_coord[..., 0] + 0.5) * (float(wf) / cw) - 0.5
-    yf = (src_kps_coord[..., 1] + 0.5) * (float(hf) / ch) - 0.5
-    gx = (xf / max(wf - 1, 1)) * 2.0 - 1.0
-    gy = (yf / max(hf - 1, 1)) * 2.0 - 1.0
-    grid = torch.stack([gx, gy], dim=-1).unsqueeze(2).to(feat_src.dtype)
 
-    padding_mode = "zeros" if feat_src.device.type == "mps" else "border"
-    desc = F.grid_sample(
-        feat_src, grid, mode="bilinear", padding_mode=padding_mode, align_corners=False
-    ).squeeze(-1).transpose(1, 2)  # (B, N, C)
-
-    sims = torch.einsum("bnc,bchw->bnhw", desc, feat_tgt)
-
-    flat = sims.reshape(bsz * n_pts, -1)
-    idx = torch.argmax(flat, dim=1)
-    xi = (idx % wf).to(sims.dtype)
-    yi = (idx // wf).to(sims.dtype)
-    x_pix = (xi + 0.5) * (cw / float(wf)) - 0.5
-    y_pix = (yi + 0.5) * (ch / float(hf)) - 0.5
-    pred = torch.stack([x_pix, y_pix], dim=-1).reshape(bsz, n_pts, 2)
-    return pred, sims
+def _to_original_frame(pred: torch.Tensor, img_hw: Tuple[int, int], orig_wh: torch.Tensor) -> torch.Tensor:
+    """Map ``(B, N, 2)`` points from the preprocessed frame to each image's original frame."""
+    w0 = orig_wh[:, 0].view(-1, 1)
+    h0 = orig_wh[:, 1].view(-1, 1)
+    return torch.stack(
+        [rescale_coords(pred[..., 0], float(img_hw[1]), w0), rescale_coords(pred[..., 1], float(img_hw[0]), h0)],
+        dim=-1,
+    )
 
 
 def run_spair_pck_eval(
@@ -265,7 +269,7 @@ def run_spair_pck_eval(
     _t1: Optional[float] = None
     _timing_images = 0
 
-    with torch.inference_mode(), _autocast_eval(eval_device):
+    with torch.inference_mode():
         for batch in loader:
             if _batch_idx == _WARMUP_BATCHES:
                 if eval_device.type == "cuda":
@@ -274,45 +278,20 @@ def run_spair_pck_eval(
             src = batch["src_img"].to(eval_device, non_blocking=pin_mem)
             tgt = batch["tgt_img"].to(eval_device, non_blocking=pin_mem)
             src_kps = batch["src_kps"].to(eval_device)
-            tgt_kps = batch["tgt_kps"].to(eval_device)
+            tgt_kps_orig = batch["tgt_kps_orig"].to(eval_device)
+            tgt_wh = batch["tgt_imsize"].to(eval_device)
             n_valid = batch["n_valid_keypoints"].to(eval_device).reshape(-1)
             pckthres = batch["pck_threshold_bbox"].to(eval_device).reshape(-1)
             categories = batch["category"]
             bsz = int(src.shape[0])
-            h_in, w_in = int(src.shape[2]), int(src.shape[3])
+            img_hw = (int(src.shape[2]), int(src.shape[3]))
 
-            feats, meta = extractor(torch.cat([src, tgt], dim=0))
-            feats = feats.float()  # autocast bf16 forward + fp32 matching/PCK
-            feats_src, feats_tgt = feats[:bsz], feats[bsz:]
-            coord_h, coord_w = meta.get("coord_hw", (h_in, w_in))
-
-            if (coord_h, coord_w) != (h_in, w_in):
-                scale_to = src_kps.new_tensor([coord_w / float(w_in), coord_h / float(h_in)])
-                src_kps_coord = src_kps * scale_to
-            else:
-                src_kps_coord = src_kps
-
-            pred_coord, sims = _batched_match(
-                feats_src, feats_tgt, src_kps_coord, (coord_h, coord_w)
-            )
-
-            if spec.use_window_soft_argmax:
-                bsz_, n_pts, hf, wf = sims.shape
-                refined = refine_predictions_window_soft_argmax(
-                    sims.reshape(bsz_ * n_pts, hf, wf),
-                    (coord_h, coord_w),
-                    window_size=spec.wsa_window,
-                    temperature=spec.wsa_temperature,
-                ).reshape(bsz_, n_pts, 2)
-                pred_coord = refined
-
-            if (coord_h, coord_w) != (h_in, w_in):
-                scale_back = pred_coord.new_tensor([w_in / float(coord_w), h_in / float(coord_h)])
-                pred_ds = pred_coord * scale_back
-            else:
-                pred_ds = pred_coord
-
-            dists = torch.norm(tgt_kps - pred_ds, dim=-1)  # (B, N)
+            with _autocast_eval(eval_device):
+                feats, _meta = extractor(torch.cat([src, tgt], dim=0))
+            feats = feats.float()
+            pred = _predict_batch(feats[:bsz], feats[bsz:], src_kps, img_hw, spec)
+            pred_orig = _to_original_frame(pred, img_hw, tgt_wh)
+            dists = torch.norm(tgt_kps_orig - pred_orig, dim=-1)  # (B, N), original pixels
             # (n_alpha, B, N) bool
             correct_all = (dists.unsqueeze(0) <= alphas_t.view(-1, 1, 1) * pckthres.view(1, -1, 1)).cpu()
             n_valid_list = n_valid.cpu().tolist()

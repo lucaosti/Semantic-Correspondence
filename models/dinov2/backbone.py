@@ -39,14 +39,14 @@ def extract_dense_grid(
     model: nn.Module,
     x_imagenet: torch.Tensor,
     *,
-    layer_indices: Union[int, Sequence[int]] = 4,
+    layer: int = -1,
     reshape: bool = True,
 ) -> Tuple[torch.Tensor, Dict[str, Any]]:
     """Extract dense patch-grid features for a DINOv2 ViT using intermediate layers."""
     return extract_intermediate_dense_grid(
         model,
         x_imagenet,
-        layer_indices=layer_indices,
+        layer=layer,
         reshape=reshape,
     )
 
