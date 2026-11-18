@@ -75,13 +75,11 @@ def test_pad_keypoints_pads_with_sentinel():
     assert torch.all(out[2:] == INVALID_KP_COORD)
 
 
-def test_pad_keypoints_truncates_when_over_max():
+def test_pad_keypoints_raises_when_over_max():
+    # Regression: keypoints beyond the slot count used to be dropped silently from PCK.
     kps = torch.arange(2 * (MAX_KEYPOINTS + 5), dtype=torch.float32).view(-1, 2)
-    out, n_valid = pad_keypoints_to_max(kps)
-    assert out.shape == (MAX_KEYPOINTS, 2)
-    assert n_valid == MAX_KEYPOINTS
-    # No sentinel values should appear (all slots valid).
-    assert not torch.any(out == INVALID_KP_COORD)
+    with pytest.raises(ValueError):
+        pad_keypoints_to_max(kps)
 
 
 def test_pad_keypoints_empty_input():

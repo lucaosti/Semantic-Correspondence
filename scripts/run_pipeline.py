@@ -41,9 +41,10 @@ RUN_EVAL_FINETUNED_CHECKPOINT: Tuple[bool, bool, bool] = (True, True, True)
 RUN_EVAL_LORA_CHECKPOINT: Tuple[bool, bool, bool] = (True, True, True)
 RUN_EVAL_FINETUNED_WSA: Tuple[bool, bool, bool] = (True, True, True)
 RUN_EVAL_LORA_WSA: Tuple[bool, bool, bool] = (True, True, True)
-# Inference-only ablations cheap enough to run inside the single pipeline pass.
-# WSA sweep over `WSA_WINDOW_LIST` on the training-free baseline; DINO layer-index sweep
-# over `EVAL_LAYER_INDICES_LIST` on the training-free baseline (DINO backbones only).
+# Inference-only sweeps on the training-free baseline, run on SWEEP_SPLIT (val) before the
+# test evaluation: WSA over WSA_WINDOW_LIST x WSA_TEMPERATURE_LIST (the best pair per
+# backbone on val PCK@0.1 is then used for every WSA run on test), and single DINO block
+# over EVAL_LAYER_LIST (ablation only; all stages use the last block, DINO_LAYER).
 RUN_EVAL_WSA_SWEEP: Tuple[bool, bool, bool] = (True, True, True)
 RUN_EVAL_LAYER_SWEEP: Tuple[bool, bool, bool] = (True, True, False)
 RUN_EXPORT_METRICS_TABLES: bool = True
@@ -84,15 +85,16 @@ TRAIN_FINETUNE_SIZE_VARIANTS: bool = True
 TRAIN_LORA_SIZE_VARIANTS: bool = True
 RUN_EVAL_SIZE_VARIANTS: bool = True
 
+# FT_BATCH_SIZE / LORA_BATCH_SIZE are the *effective* batch (pairs per optimizer step),
+# identical for every backbone. *_BATCH_SIZE_BY_BACKBONE sets a smaller micro-batch where
+# memory requires it; the accumulation steps are effective / micro (must divide exactly).
 FT_BATCH_SIZE: int = 20
-FT_ACCUMULATION_STEPS: int = 1  # effective batch = FT_BATCH_SIZE * FT_ACCUMULATION_STEPS
 FT_EPOCHS: int = 50
 FT_PATIENCE: int = 7
 FT_MIN_DELTA: float = 0.0
 FT_LR: float = 5e-5
 FT_WEIGHT_DECAY: float = 0.01
 LORA_BATCH_SIZE: int = 20
-LORA_ACCUMULATION_STEPS: int = 1
 LORA_EPOCHS: int = 50
 LORA_PATIENCE: int = 7
 LORA_MIN_DELTA: float = 0.0
@@ -102,16 +104,16 @@ PRECISION: str = "auto"
 COMPILE: bool = True  # silently no-op on non-CUDA / Ampere<8.0 (see _training_common.maybe_compile_model)
 TRAIN_FINETUNE_NO_AUG: bool = True  # also run finetune without photometric augmentation
 FT_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {
-    "sam_vit_b": 4,
-    "sam_vit_l": 3,
-    "dinov2_vitl14": 12,
-    "dinov3_vitl16": 12,
+    "sam_vit_b": 10,
+    "sam_vit_l": 4,
+    "dinov2_vitl14": 10,
+    "dinov3_vitl16": 10,
 }
 LORA_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {
-    "sam_vit_b": 4,
-    "sam_vit_l": 3,
-    "dinov2_vitl14": 14,
-    "dinov3_vitl16": 14,
+    "sam_vit_b": 10,
+    "sam_vit_l": 4,
+    "dinov2_vitl14": 10,
+    "dinov3_vitl16": 10,
 }
 EVAL_BATCH_SIZE: int = 8
 EVAL_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {
@@ -120,7 +122,8 @@ EVAL_BATCH_SIZE_BY_BACKBONE: Dict[str, int] = {
 }
 RESUME_SAVE_INTERVAL: int = 50
 LOG_BATCH_INTERVAL: int = 50
-DINO_LAYER_INDICES: int = 4
+DINO_LAYER: int = -1  # last block; training adapts the last blocks, so it must stay -1
+LOSS_TEMPERATURE: float = 0.07
 PREPROCESS: str = "FIXED_RESIZE"
 IMAGE_SIZE_BY_BACKBONE: Dict[str, Tuple[int, int]] = {
     "dinov2_vits14": (518, 518),
@@ -138,14 +141,19 @@ NUM_WORKERS: Optional[int] = None
 DEVICE: Optional[str] = None
 
 EVAL_SPLIT: str = "test"
+SWEEP_SPLIT: str = "val"
 EVAL_LIMIT: int = 0
 EVAL_ALPHAS: Tuple[float, ...] = (0.05, 0.1, 0.2)
+# Fallback WSA setting, used only when the val sweep is disabled.
 WSA_WINDOW: int = 5
-WSA_TEMPERATURE: float = 1.0
+WSA_TEMPERATURE: float = 0.05
 # Inference-only ablation sweeps (cheap; run inside the single pipeline pass so the analysis
 # notebook has all data without re-running training).
 WSA_WINDOW_LIST: Tuple[int, ...] = (3, 5, 7, 9)
-EVAL_LAYER_INDICES_LIST: Tuple[int, ...] = (4, 9, 11)
+WSA_TEMPERATURE_LIST: Tuple[float, ...] = (0.02, 0.05, 0.1)
+EVAL_LAYER_LIST: Tuple[int, ...] = (3, 5, 7, 9, 10, 11)
+# Filled by the WSA sweep: backbone -> (window, temperature) selected on SWEEP_SPLIT.
+_WSA_SELECTED: Dict[str, Tuple[int, float]] = {}
 
 BACKBONE_NAMES: Tuple[str, str, str] = ("dinov2_vitb14", "dinov3_vitb16", "sam_vit_b")
 _ALL_BACKBONE_NAMES: Tuple[str, ...] = (
@@ -227,11 +235,21 @@ def _resolve_image_hw(backbone: str) -> Tuple[int, int]:
 
 
 def _resolve_batch_size(stage: str, backbone: str) -> int:
+    """Micro-batch fed to the GPU for ``stage`` / ``backbone``."""
     if stage == "finetune":
         return int(FT_BATCH_SIZE_BY_BACKBONE.get(backbone, FT_BATCH_SIZE))
     if stage == "lora":
         return int(LORA_BATCH_SIZE_BY_BACKBONE.get(backbone, LORA_BATCH_SIZE))
     raise ValueError(f"Unknown stage: {stage!r}")
+
+
+def _resolve_accumulation(stage: str, backbone: str) -> int:
+    """Accumulation steps so that micro-batch x steps == the stage's effective batch."""
+    effective = FT_BATCH_SIZE if stage == "finetune" else LORA_BATCH_SIZE
+    micro = _resolve_batch_size(stage, backbone)
+    if micro > effective or effective % micro != 0:
+        raise ValueError(f"{stage} micro-batch {micro} for {backbone} must divide the effective batch {effective}.")
+    return effective // micro
 
 
 def _triplet_bool(name: str, value: Any) -> Tuple[bool, bool, bool]:
@@ -301,14 +319,20 @@ def _apply_pipeline_yaml(path: Path) -> None:
             g["WSA_TEMPERATURE"] = float(runtime["wsa_temperature"])
         if runtime.get("wsa_window_list") is not None:
             g["WSA_WINDOW_LIST"] = tuple(int(x) for x in runtime["wsa_window_list"])
-        if runtime.get("eval_layer_indices_list") is not None:
-            g["EVAL_LAYER_INDICES_LIST"] = tuple(int(x) for x in runtime["eval_layer_indices_list"])
+        if runtime.get("wsa_temperature_list") is not None:
+            g["WSA_TEMPERATURE_LIST"] = tuple(float(x) for x in runtime["wsa_temperature_list"])
+        if runtime.get("eval_layer_list") is not None:
+            g["EVAL_LAYER_LIST"] = tuple(int(x) for x in runtime["eval_layer_list"])
         if runtime.get("log_batch_interval") is not None:
             g["LOG_BATCH_INTERVAL"] = int(runtime["log_batch_interval"])
         if runtime.get("resume_save_interval") is not None:
             g["RESUME_SAVE_INTERVAL"] = int(runtime["resume_save_interval"])
-        if runtime.get("dino_layer_indices") is not None:
-            g["DINO_LAYER_INDICES"] = int(runtime["dino_layer_indices"])
+        if runtime.get("dino_layer") is not None:
+            g["DINO_LAYER"] = int(runtime["dino_layer"])
+        if runtime.get("loss_temperature") is not None:
+            g["LOSS_TEMPERATURE"] = float(runtime["loss_temperature"])
+        if runtime.get("sweep_split") is not None:
+            g["SWEEP_SPLIT"] = str(runtime["sweep_split"])
         if runtime.get("eval_split") is not None:
             g["EVAL_SPLIT"] = str(runtime["eval_split"])
 
@@ -350,7 +374,7 @@ def _apply_pipeline_yaml(path: Path) -> None:
                 "finetune.batch_size_by_backbone", finetune["batch_size_by_backbone"]
             )
         if finetune.get("accumulation_steps") is not None:
-            g["FT_ACCUMULATION_STEPS"] = int(finetune["accumulation_steps"])
+            raise ValueError("finetune.accumulation_steps is derived from batch_size / batch_size_by_backbone.")
 
     lora = raw.get("lora") or {}
     if isinstance(lora, dict):
@@ -382,7 +406,7 @@ def _apply_pipeline_yaml(path: Path) -> None:
                 "lora.batch_size_by_backbone", lora["batch_size_by_backbone"]
             )
         if lora.get("accumulation_steps") is not None:
-            g["LORA_ACCUMULATION_STEPS"] = int(lora["accumulation_steps"])
+            raise ValueError("lora.accumulation_steps is derived from batch_size / batch_size_by_backbone.")
 
     toggles = raw.get("workflow_toggles") or {}
     if isinstance(toggles, dict):
@@ -451,8 +475,6 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "LORA_BATCH_SIZE": LORA_BATCH_SIZE,
         "FT_BATCH_SIZE_BY_BACKBONE": dict(sorted(FT_BATCH_SIZE_BY_BACKBONE.items())),
         "LORA_BATCH_SIZE_BY_BACKBONE": dict(sorted(LORA_BATCH_SIZE_BY_BACKBONE.items())),
-        "FT_ACCUMULATION_STEPS": FT_ACCUMULATION_STEPS,
-        "LORA_ACCUMULATION_STEPS": LORA_ACCUMULATION_STEPS,
         "LORA_EPOCHS": LORA_EPOCHS,
         "LORA_PATIENCE": LORA_PATIENCE,
         "LORA_MIN_DELTA": LORA_MIN_DELTA,
@@ -466,7 +488,10 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "IMAGE_HEIGHT": IMAGE_HEIGHT,
         "IMAGE_WIDTH": IMAGE_WIDTH,
         "LOG_BATCH_INTERVAL": LOG_BATCH_INTERVAL,
-        "DINO_LAYER_INDICES": DINO_LAYER_INDICES,
+        "DINO_LAYER": DINO_LAYER,
+        "LOSS_TEMPERATURE": LOSS_TEMPERATURE,
+        "SWEEP_SPLIT": SWEEP_SPLIT,
+        "WSA_TEMPERATURE_LIST": list(WSA_TEMPERATURE_LIST),
         "DINOV2_WEIGHTS": DINOV2_WEIGHTS,
         "DINOV3_WEIGHTS": DINOV3_WEIGHTS,
         "SAM_CHECKPOINT": SAM_CHECKPOINT,
@@ -497,7 +522,7 @@ def _fingerprint_payload() -> Dict[str, Any]:
         "RUN_EVAL_WSA_SWEEP": list(RUN_EVAL_WSA_SWEEP),
         "RUN_EVAL_LAYER_SWEEP": list(RUN_EVAL_LAYER_SWEEP),
         "WSA_WINDOW_LIST": list(WSA_WINDOW_LIST),
-        "EVAL_LAYER_INDICES_LIST": list(EVAL_LAYER_INDICES_LIST),
+        "EVAL_LAYER_LIST": list(EVAL_LAYER_LIST),
         "RUN_EXPORT_METRICS_TABLES": RUN_EXPORT_METRICS_TABLES,
         "RUN_PYTEST": RUN_PYTEST,
         "TRAIN_FINETUNE_NO_AUG": TRAIN_FINETUNE_NO_AUG,
@@ -595,8 +620,24 @@ def _run_cmd(cwd: Path, cmd: List[str], logger: PipelineLogger) -> int:
     return p.wait()
 
 
+# Set by --write-train-commands: training runs are recorded here instead of executed.
+_TRAIN_COMMANDS: Optional[List[List[str]]] = None
+
+
 def _run_script(cwd: Path, rel_script: str, args: Sequence[str], logger: PipelineLogger) -> int:
+    if _TRAIN_COMMANDS is not None and rel_script == "scripts/train.py":
+        _TRAIN_COMMANDS.append([*args] if "--resume" in args else [*args, "--resume", "auto"])
+        return 0
     return _run_cmd(cwd, [sys.executable, str(cwd / rel_script), *args], logger)
+
+
+def _write_train_commands(path: Path) -> None:
+    """Write one ``train.py`` argument line per training run, SAM runs (the longest) first."""
+    import shlex
+
+    cmds = sorted(_TRAIN_COMMANDS or [], key=lambda a: not a[a.index("--backbone") + 1].startswith("sam"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(shlex.join(c) + "\n" for c in cmds), encoding="utf-8")
 
 
 def _default_finetune_ckpt_for(cwd: Path, backbone: str, n_blocks: int, *, noaug: bool = False) -> str:
@@ -631,7 +672,7 @@ def _build_eval_specs(
     * ``"wsa_sweep"`` — training-free baseline at every window in :data:`WSA_WINDOW_LIST`
       (used for the WSA window sensitivity figure).
     * ``"layer_sweep"`` — training-free DINO baseline at every intermediate layer in
-      :data:`EVAL_LAYER_INDICES_LIST`.
+      :data:`EVAL_LAYER_LIST`.
     """
     from evaluation.experiment_runner import EvalRunSpec
 
@@ -650,8 +691,34 @@ def _build_eval_specs(
             width=w,
             batch_size=bs,
             num_workers=num_workers,
+            dino_layer=DINO_LAYER,
             **wt,
         )
+
+    def _wsa_kwargs(backbone: str) -> Dict[str, Any]:
+        w, t = _WSA_SELECTED.get(backbone, (WSA_WINDOW, WSA_TEMPERATURE))
+        return {"wsa_window": int(w), "wsa_temperature": float(t)}
+
+    def _wsa_sweep_specs(backbone: str, bk: Dict[str, Any]) -> List[EvalRunSpec]:
+        kw = dict(bk, split=SWEEP_SPLIT)
+        return [
+            EvalRunSpec(
+                name=f"{backbone}_baseline_wsa_w{w}_t{t:g}",
+                use_window_soft_argmax=True,
+                wsa_window=int(w),
+                wsa_temperature=float(t),
+                **kw,
+            )
+            for w in WSA_WINDOW_LIST
+            for t in WSA_TEMPERATURE_LIST
+        ]
+
+    def _layer_sweep_specs(backbone: str, bk: Dict[str, Any]) -> List[EvalRunSpec]:
+        kw = dict(bk, split=SWEEP_SPLIT)
+        return [
+            EvalRunSpec(name=f"{backbone}_baseline_layer{li}", **dict(kw, dino_layer=int(li)))
+            for li in EVAL_LAYER_LIST
+        ]
 
     for idx, backbone in enumerate(BACKBONE_NAMES):
         any_sam_flag = any(
@@ -669,25 +736,12 @@ def _build_eval_specs(
 
         if family == "wsa_sweep":
             if RUN_EVAL_WSA_SWEEP[idx]:
-                for w in WSA_WINDOW_LIST:
-                    specs.append(EvalRunSpec(
-                        name=f"{backbone}_baseline_wsa_w{w}",
-                        use_window_soft_argmax=True,
-                        wsa_window=int(w),
-                        wsa_temperature=WSA_TEMPERATURE,
-                        **bk,
-                    ))
+                specs.extend(_wsa_sweep_specs(backbone, bk))
             continue
 
         if family == "layer_sweep":
             if RUN_EVAL_LAYER_SWEEP[idx] and backbone != "sam_vit_b":
-                for li in EVAL_LAYER_INDICES_LIST:
-                    bk_li = dict(bk)
-                    specs.append(EvalRunSpec(
-                        name=f"{backbone}_baseline_layer{li}",
-                        dino_layer_indices=int(li),
-                        **bk_li,
-                    ))
+                specs.extend(_layer_sweep_specs(backbone, bk))
             continue
 
         if RUN_EVAL_BASELINE[idx]:
@@ -696,8 +750,7 @@ def _build_eval_specs(
             specs.append(EvalRunSpec(
                 name=f"{backbone}_baseline_wsa",
                 use_window_soft_argmax=True,
-                wsa_window=WSA_WINDOW,
-                wsa_temperature=WSA_TEMPERATURE,
+                **_wsa_kwargs(backbone),
                 **bk,
             ))
 
@@ -714,8 +767,7 @@ def _build_eval_specs(
                     name=f"{backbone}_ft_lb{nb}_wsa",
                     checkpoint=ck,
                     use_window_soft_argmax=True,
-                    wsa_window=WSA_WINDOW,
-                    wsa_temperature=WSA_TEMPERATURE,
+                    **_wsa_kwargs(backbone),
                     **bk,
                 ))
 
@@ -732,8 +784,7 @@ def _build_eval_specs(
                     name=f"{backbone}_lora_lb{lora_nb}_wsa",
                     checkpoint=lora_ck,
                     use_window_soft_argmax=True,
-                    wsa_window=WSA_WINDOW,
-                    wsa_temperature=WSA_TEMPERATURE,
+                    **_wsa_kwargs(backbone),
                     **bk,
                 ))
 
@@ -748,8 +799,7 @@ def _build_eval_specs(
                             name=f"{backbone}_ft_lb{nb}_noaug_wsa",
                             checkpoint=na_ck,
                             use_window_soft_argmax=True,
-                            wsa_window=WSA_WINDOW,
-                            wsa_temperature=WSA_TEMPERATURE,
+                            **_wsa_kwargs(backbone),
                             **bk,
                         ))
 
@@ -767,32 +817,19 @@ def _build_eval_specs(
             bk = _base_kwargs(backbone)
 
             if family == "wsa_sweep":
-                for w in WSA_WINDOW_LIST:
-                    specs.append(EvalRunSpec(
-                        name=f"{backbone}_baseline_wsa_w{w}",
-                        use_window_soft_argmax=True,
-                        wsa_window=int(w),
-                        wsa_temperature=WSA_TEMPERATURE,
-                        **bk,
-                    ))
+                specs.extend(_wsa_sweep_specs(backbone, bk))
                 continue
 
             if family == "layer_sweep":
                 if not is_sam:
-                    for li in EVAL_LAYER_INDICES_LIST:
-                        specs.append(EvalRunSpec(
-                            name=f"{backbone}_baseline_layer{li}",
-                            dino_layer_indices=int(li),
-                            **bk,
-                        ))
+                    specs.extend(_layer_sweep_specs(backbone, bk))
                 continue
 
             specs.append(EvalRunSpec(name=f"{backbone}_baseline", **bk))
             specs.append(EvalRunSpec(
                 name=f"{backbone}_baseline_wsa",
                 use_window_soft_argmax=True,
-                wsa_window=WSA_WINDOW,
-                wsa_temperature=WSA_TEMPERATURE,
+                **_wsa_kwargs(backbone),
                 **bk,
             ))
             for nb in LAST_BLOCKS_LIST:
@@ -804,8 +841,7 @@ def _build_eval_specs(
                         name=f"{backbone}_ft_lb{nb}_wsa",
                         checkpoint=ck,
                         use_window_soft_argmax=True,
-                        wsa_window=WSA_WINDOW,
-                        wsa_temperature=WSA_TEMPERATURE,
+                        **_wsa_kwargs(backbone),
                         **bk,
                     ))
             for lora_nb in LORA_LAST_BLOCKS_LIST:
@@ -817,8 +853,7 @@ def _build_eval_specs(
                         name=f"{backbone}_lora_lb{lora_nb}_wsa",
                         checkpoint=lora_ck,
                         use_window_soft_argmax=True,
-                        wsa_window=WSA_WINDOW,
-                        wsa_temperature=WSA_TEMPERATURE,
+                        **_wsa_kwargs(backbone),
                         **bk,
                     ))
 
@@ -982,6 +1017,32 @@ def _append_eval_checkpoint(ckpt_path: Path, result: Dict[str, Any]) -> None:
         f.write(json.dumps(result, default=str) + "\n")
 
 
+def _select_wsa_from_sweep(
+    cwd: Path, results: Sequence[Dict[str, Any]], logger: PipelineLogger
+) -> None:
+    """Pick, per backbone, the (window, temperature) with the best val PCK@0.1 (per image).
+
+    Ties keep the first setting in sweep order. Written to ``wsa_selection.json``.
+    """
+    best: Dict[str, Tuple[float, int, float]] = {}
+    for r in results:
+        spec = r["spec"]
+        if spec["split"] != SWEEP_SPLIT:
+            raise ValueError(f"WSA sweep result {r['name']} is on split {spec['split']!r}")
+        score = float(r["metrics"]["pck@0.1"])
+        b = spec["backbone"]
+        if b not in best or score > best[b][0]:
+            best[b] = (score, int(spec["wsa_window"]), float(spec["wsa_temperature"]))
+    _WSA_SELECTED.clear()
+    _WSA_SELECTED.update({b: (w, t) for b, (_, w, t) in best.items()})
+    out = {b: {"wsa_window": w, "wsa_temperature": t, "split": SWEEP_SPLIT, "pck@0.1": s}
+           for b, (s, w, t) in best.items()}
+    path = cwd / "runs" / "pipeline_exports" / "wsa_selection.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    logger.log_line(f"WSA selected on {SWEEP_SPLIT}: {out}")
+
+
 def _run_eval_and_export(
     cwd: Path, sam_checkpoint: Optional[str], logger: PipelineLogger,
     *, num_workers: int, device_str: str,
@@ -991,14 +1052,15 @@ def _run_eval_and_export(
 
     device = torch.device(device_str)
 
+    # Sweeps run first on SWEEP_SPLIT; the WSA sweep fixes the test-time WSA setting.
     families = [
+        ("wsa_sweep", any(RUN_EVAL_WSA_SWEEP)),
+        ("layer_sweep", any(RUN_EVAL_LAYER_SWEEP)),
         ("main", any(any(t) for t in (
             RUN_EVAL_BASELINE, RUN_EVAL_BASELINE_WSA,
             RUN_EVAL_FINETUNED_CHECKPOINT, RUN_EVAL_LORA_CHECKPOINT,
             RUN_EVAL_FINETUNED_WSA, RUN_EVAL_LORA_WSA,
         ))),
-        ("wsa_sweep", any(RUN_EVAL_WSA_SWEEP)),
-        ("layer_sweep", any(RUN_EVAL_LAYER_SWEEP)),
     ]
     any_specs = False
     for family, enabled in families:
@@ -1035,6 +1097,8 @@ def _run_eval_and_export(
 
         if RUN_EXPORT_METRICS_TABLES:
             _export_tables(cwd, results, logger, family=family)
+        if family == "wsa_sweep":
+            _select_wsa_from_sweep(cwd, results, logger)
 
     if not any_specs:
         logger.log_line("No PCK eval specs selected.")
@@ -1119,6 +1183,7 @@ def _run_pf_eval_and_export(
     from evaluation.experiment_runner import run_spair_pck_eval
 
     from data.paths import resolve_pf_pascal_root, resolve_pf_willow_root
+    from data.pf_dataset import PF_PASCAL_CSV, PF_WILLOW_CSV
 
     if dataset == "pf_willow":
         resolved_root = resolve_pf_willow_root(pf_root)
@@ -1126,9 +1191,7 @@ def _run_pf_eval_and_export(
         resolved_root = resolve_pf_pascal_root(pf_root)
 
     # Skip gracefully if the dataset directory does not exist.
-    ann_check = (
-        "test_pairs_pf.csv" if dataset == "pf_willow" else os.path.join("annotations", "test_pairs.csv")
-    )
+    ann_check = PF_WILLOW_CSV if dataset == "pf_willow" else PF_PASCAL_CSV  # same files the loaders read
     if not os.path.isfile(os.path.join(resolved_root, ann_check)):
         logger.log_line(
             f"WARNING: {dataset} dataset not found at {resolved_root} — skipping eval.\n"
@@ -1309,10 +1372,10 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                 "--patience", str(FT_PATIENCE),
                 "--min-delta", str(FT_MIN_DELTA),
                 "--last-blocks", str(nb),
-                "--layer-indices", str(DINO_LAYER_INDICES),
+                "--dino-layer", str(DINO_LAYER),
+                "--loss-temperature", str(LOSS_TEMPERATURE),
             ]
-            if FT_ACCUMULATION_STEPS > 1:
-                args.extend(["--accumulation-steps", str(FT_ACCUMULATION_STEPS)])
+            args.extend(["--accumulation-steps", str(_resolve_accumulation("finetune", backbone))])
             logger.log_line(f"stage_id={ft_sid} batch_size={ft_bs} precision={eff_precision}")
             resume_file = (cwd / CHECKPOINT_DIR / f"{backbone}_lastblocks{nb}_resume.pt").resolve()
             if PIPELINE_RESUME and resume_file.is_file():
@@ -1356,11 +1419,11 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                     "--patience", str(FT_PATIENCE),
                     "--min-delta", str(FT_MIN_DELTA),
                     "--last-blocks", str(nb),
-                    "--layer-indices", str(DINO_LAYER_INDICES),
+                    "--dino-layer", str(DINO_LAYER),
+                    "--loss-temperature", str(LOSS_TEMPERATURE),
                     "--no-augment",
                 ]
-                if FT_ACCUMULATION_STEPS > 1:
-                    args.extend(["--accumulation-steps", str(FT_ACCUMULATION_STEPS)])
+                args.extend(["--accumulation-steps", str(_resolve_accumulation("finetune", backbone))])
                 logger.log_line(f"stage_id={ft_sid} batch_size={ft_bs} precision={eff_precision}")
                 resume_file = (cwd / CHECKPOINT_DIR / f"{backbone}_lastblocks{nb}_noaug_resume.pt").resolve()
                 if PIPELINE_RESUME and resume_file.is_file():
@@ -1413,10 +1476,10 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                 "--min-delta", str(LORA_MIN_DELTA),
                 "--last-blocks", str(lora_nb),
                 "--rank", str(LORA_RANK),
-                "--layer-indices", str(DINO_LAYER_INDICES),
+                "--dino-layer", str(DINO_LAYER),
+                "--loss-temperature", str(LOSS_TEMPERATURE),
             ]
-            if LORA_ACCUMULATION_STEPS > 1:
-                args.extend(["--accumulation-steps", str(LORA_ACCUMULATION_STEPS)])
+            args.extend(["--accumulation-steps", str(_resolve_accumulation("lora", backbone))])
             logger.log_line(f"stage_id={lora_sid} batch_size={lora_bs} precision={eff_precision}")
             resume_lora = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_lb{lora_nb}_resume.pt").resolve()
             if PIPELINE_RESUME and resume_lora.is_file():
@@ -1486,10 +1549,10 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                     "--patience", str(FT_PATIENCE),
                     "--min-delta", str(FT_MIN_DELTA),
                     "--last-blocks", str(nb),
-                    "--layer-indices", str(DINO_LAYER_INDICES),
+                    "--dino-layer", str(DINO_LAYER),
+                    "--loss-temperature", str(LOSS_TEMPERATURE),
                 ]
-                if FT_ACCUMULATION_STEPS > 1:
-                    args.extend(["--accumulation-steps", str(FT_ACCUMULATION_STEPS)])
+                args.extend(["--accumulation-steps", str(_resolve_accumulation("finetune", backbone))])
                 logger.log_line(f"stage_id={ft_sid} batch_size={ft_bs} precision={eff_precision}")
                 resume_file = (cwd / CHECKPOINT_DIR / f"{backbone}_lastblocks{nb}_resume.pt").resolve()
                 if PIPELINE_RESUME and resume_file.is_file():
@@ -1528,10 +1591,10 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                     "--min-delta", str(LORA_MIN_DELTA),
                     "--last-blocks", str(lora_nb),
                     "--rank", str(LORA_RANK),
-                    "--layer-indices", str(DINO_LAYER_INDICES),
+                    "--dino-layer", str(DINO_LAYER),
+                    "--loss-temperature", str(LOSS_TEMPERATURE),
                 ]
-                if LORA_ACCUMULATION_STEPS > 1:
-                    args.extend(["--accumulation-steps", str(LORA_ACCUMULATION_STEPS)])
+                args.extend(["--accumulation-steps", str(_resolve_accumulation("lora", backbone))])
                 logger.log_line(f"stage_id={lora_sid} batch_size={lora_bs} precision={eff_precision}")
                 resume_lora = (cwd / CHECKPOINT_DIR / f"{backbone}_lora_r{LORA_RANK}_lb{lora_nb}_resume.pt").resolve()
                 if PIPELINE_RESUME and resume_lora.is_file():
@@ -1546,6 +1609,10 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
                 if PIPELINE_RESUME:
                     _ps.mark_step_done(cwd, state, lora_sid)
                 _trace_stage(cwd, logger, "done", lora_sid, exit_code=0)
+
+    if _TRAIN_COMMANDS is not None:
+        logger.log_line(f"Recorded {len(_TRAIN_COMMANDS)} training commands; stopping before evaluation.")
+        return 0
 
     any_eval = any(any(t) for t in (
         RUN_EVAL_BASELINE, RUN_EVAL_BASELINE_WSA,
@@ -1617,6 +1684,11 @@ def _pipeline_run(cwd: Path, logger: PipelineLogger) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run semantic-correspondence pipeline.")
     parser.add_argument("--config", metavar="PATH", default=None, help="Optional YAML file.")
+    parser.add_argument(
+        "--write-train-commands", metavar="PATH", default=None,
+        help="Write the train.py argument lines of every enabled training run to PATH (one per "
+             "line, for a SLURM job array) without training, evaluating or touching pipeline state.",
+    )
     args = parser.parse_args()
 
     cwd = _REPO
@@ -1634,8 +1706,13 @@ def main() -> int:
     iso_start = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     _manifest_append(cwd, [iso_start, "start", log_path.name, ""])
     exit_code = 1
+    global _TRAIN_COMMANDS, PIPELINE_RESUME, RUN_VERIFY_DATASET
+    if args.write_train_commands:
+        _TRAIN_COMMANDS, PIPELINE_RESUME, RUN_VERIFY_DATASET = [], False, False
     try:
         exit_code = _pipeline_run(cwd, logger)
+        if args.write_train_commands and exit_code == 0:
+            _write_train_commands(Path(args.write_train_commands))
     finally:
         logger.close(exit_code)
         iso_end = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

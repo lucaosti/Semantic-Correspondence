@@ -1,120 +1,130 @@
 \section{Experiments}
 \label{sec:experiments}
 
-\subsection{Experimental Setup}
-\paragraph{Dataset and Metrics.} We evaluate our models on the SPair-71k benchmark~\cite{min2019spair}. Following strict validation protocols, the training split is used for optimization, the validation split for hyperparameter tuning, and the test split exclusively for final reporting. Performance is measured using the Percentage of Correct Keypoints (PCK) metric at thresholds $\alpha \in \{0.05, 0.1, 0.2\}$, normalized by the target object's bounding box size.
+\subsection{Setup}
+\label{sec:setup}
 
-\paragraph{Implementation Details.} Experiments are conducted using the Base (ViT-B) variants of DINOv2, DINOv3, and SAM. Both fine-tuning and LoRA stages are trained with AdamW on a Gaussian Cross-Entropy loss. Fine-tuning uses LR $5\times10^{-5}$ and weight decay $0.01$; LoRA uses LR $10^{-3}$ and weight decay $0.0$ (no regularization, as the low-rank matrices are already strongly constrained by their rank). Due to memory constraints, the batch size is set to 20 for DINO backbones and 4 for SAM. Input images are resized to fixed resolutions: $518\times518$ for DINOv2 and $512\times512$ for DINOv3 and SAM. Training uses early stopping with patience 7 on validation loss. Both fine-tuning and LoRA sweep the number of adapted blocks $N \in \{1, 2, 4\}$ as an ablation (Section~\ref{sec:ablations}); LoRA adapters (rank 8, $\alpha{=}16$) are applied to the MLP layers of the last $N$ blocks. For fine-tuning, we additionally run a no-augmentation variant to quantify the effect of photometric data augmentation. Throughput (images/sec) and peak GPU memory are measured after three warm-up batches to characterize computational efficiency.
-All experiments were conducted on a dedicated virtual machine hosted on a Proxmox hypervisor, equipped with an NVIDIA GeForce RTX~5080 GPU (16\,GB VRAM), an Intel Core i5 processor with 10 logical cores allocated out of 20 available on the host, and 24\,GB of RAM out of 32\,GB available on the host system. Training the full pipeline (18 fine-tuning and LoRA stages across three backbones and three adaptation depths) required several days of uninterrupted GPU computation, making repeated full re-runs for hyperparameter search infeasible within the project timeline.
+\paragraph{Data and metric.}
+We use the official SPair-71k splits: 53{,}340 training, 5{,}384 validation and 12{,}234 test pairs. Training uses only the training split. The validation split selects the training checkpoint, the WSA window and temperature, and the feature layer; the test split is evaluated once per configuration. We report PCK at $\alpha\in\{0.05,0.1,0.2\}$ relative to the target bounding box, measured in original image pixels. Unless stated otherwise PCK is averaged \emph{per image} (the mean over pairs of the fraction of correct keypoints), the convention of supervised methods~\cite{zhang2024telling}; per-keypoint averages are in the supplementary material (\cref{tab:main_pt}).
 
-\subsection{Quantitative Results}
-Table~\ref{tab:quantitative_results} summarizes the PCK performance of all evaluated backbones across methodological stages. Per-image (macro) PCK is reported; per-keypoint (micro) results are provided in the supplementary material. All values are measured on the SPair-71k test split.
+\paragraph{Training.}
+All adapted models are trained with AdamW and the loss of \cref{eq:loss}, at a constant learning rate: $5\times10^{-5}$ with weight decay $0.01$ for fine-tuning, $10^{-3}$ without weight decay for LoRA, whose rank already constrains the update. The effective batch is 20 pairs for every backbone; for SAM it is obtained as two accumulated micro-batches of 10, which gives the same gradient because the loss is a mean over pairs and the backbones contain no batch-dependent layers. Training runs in bfloat16 autocast with similarity maps and loss in float32. Photometric augmentation (brightness, contrast and saturation in $[0.85,1.15]$, hue in $[-0.05,0.05]$, applied identically to both images with probability $0.9$) is used unless stated otherwise; geometric augmentation is excluded because it would require consistent keypoint remapping. We train for up to 50 epochs with early stopping on the validation loss (patience 7) and keep the checkpoint with the lowest validation loss. All 27 training runs and all evaluations were executed on single NVIDIA H100 NVL GPUs.
 
-\begin{table}[ht]
-    \centering
-    \caption{PCK evaluation on the SPair-71k test split (per-image macro). Best result in each column is in \textbf{bold}. WSA = Windowed Soft-Argmax; FT = Fine-Tuned last $N$ blocks.}
-    \label{tab:quantitative_results}
-    \resizebox{\columnwidth}{!}{%
-    \begin{tabular}{llcccc}
-        \toprule
-        \textbf{Model} & \textbf{Method} & \textbf{Blocks} & \textbf{PCK@0.05} & \textbf{PCK@0.10} & \textbf{PCK@0.20} \\
-        \midrule
-        \multicolumn{6}{l}{\textit{Training-Free Baseline}} \\
-        DINOv2 (ViT-B) & Baseline (Argmax) & —  & 0.172 & 0.261 & 0.365 \\
-        DINOv2 (ViT-B) & Baseline + WSA    & —  & 0.176 & 0.263 & 0.367 \\
-        DINOv3 (ViT-B) & Baseline (Argmax) & —  & 0.199 & 0.306 & 0.418 \\
-        DINOv3 (ViT-B) & Baseline + WSA    & —  & 0.202 & 0.308 & 0.421 \\
-        SAM    (ViT-B) & Baseline (Argmax) & —  & 0.130 & 0.209 & 0.336 \\
-        SAM    (ViT-B) & Baseline + WSA    & —  & 0.131 & 0.209 & 0.337 \\
-        \midrule
-        \multicolumn{6}{l}{\textit{Light Fine-Tuning (last $N$ blocks, with photometric augmentation)}} \\
-        DINOv2 (ViT-B) & FT (Argmax) & 1 & 0.289 & 0.433 & 0.572 \\
-        DINOv2 (ViT-B) & FT + WSA    & 1 & 0.303 & 0.438 & 0.575 \\
-        DINOv2 (ViT-B) & FT (Argmax) & 2 & 0.270 & 0.452 & 0.615 \\
-        DINOv2 (ViT-B) & FT + WSA    & 2 & 0.307 & 0.470 & \textbf{0.621} \\
-        DINOv2 (ViT-B) & FT (Argmax) & 4 & 0.156 & 0.311 & 0.496 \\
-        DINOv2 (ViT-B) & FT + WSA    & 4 & 0.199 & 0.337 & 0.507 \\
-        DINOv3 (ViT-B) & FT (Argmax) & 1 & 0.302 & 0.465 & 0.601 \\
-        DINOv3 (ViT-B) & FT + WSA    & 1 & 0.314 & \textbf{0.471} & 0.604 \\
-        DINOv3 (ViT-B) & FT (Argmax) & 2 & 0.282 & 0.446 & 0.609 \\
-        DINOv3 (ViT-B) & FT + WSA    & 2 & 0.314 & 0.460 & 0.615 \\
-        DINOv3 (ViT-B) & FT (Argmax) & 4 & 0.199 & 0.360 & 0.538 \\
-        DINOv3 (ViT-B) & FT + WSA    & 4 & 0.240 & 0.387 & 0.550 \\
-        SAM    (ViT-B) & FT (Argmax) & 1 & 0.068 & 0.131 & 0.244 \\
-        SAM    (ViT-B) & FT + WSA    & 1 & 0.072 & 0.133 & 0.245 \\
-        SAM    (ViT-B) & FT (Argmax) & 2 & 0.062 & 0.112 & 0.207 \\
-        SAM    (ViT-B) & FT + WSA    & 2 & 0.066 & 0.114 & 0.209 \\
-        SAM    (ViT-B) & FT (Argmax) & 4 & 0.062 & 0.111 & 0.207 \\
-        SAM    (ViT-B) & FT + WSA    & 4 & 0.067 & 0.113 & 0.209 \\
-        \midrule
-        \multicolumn{6}{l}{\textit{LoRA (rank 8, $\alpha{=}16$, last $N$ blocks)}} \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 1 & 0.245 & 0.371 & 0.503 \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 1 & 0.255 & 0.375 & 0.506 \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 2 & 0.263 & 0.402 & 0.547 \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 2 & 0.283 & 0.413 & 0.553 \\
-        DINOv2 (ViT-B) & LoRA (Argmax) & 4 & 0.132 & 0.270 & 0.450 \\
-        DINOv2 (ViT-B) & LoRA + WSA    & 4 & 0.159 & 0.292 & 0.461 \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 1 & 0.259 & 0.398 & 0.537 \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 1 & 0.267 & 0.403 & 0.541 \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 2 & 0.302 & 0.452 & 0.597 \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 2 & \textbf{0.318} & 0.462 & 0.602 \\
-        DINOv3 (ViT-B) & LoRA (Argmax) & 4 & 0.157 & 0.303 & 0.477 \\
-        DINOv3 (ViT-B) & LoRA + WSA    & 4 & 0.190 & 0.327 & 0.488 \\
-        SAM    (ViT-B) & LoRA (Argmax) & 1 & 0.083 & 0.155 & 0.281 \\
-        SAM    (ViT-B) & LoRA + WSA    & 1 & 0.087 & 0.157 & 0.282 \\
-        SAM    (ViT-B) & LoRA (Argmax) & 2 & 0.042 & 0.087 & 0.176 \\
-        SAM    (ViT-B) & LoRA + WSA    & 2 & 0.047 & 0.091 & 0.179 \\
-        SAM    (ViT-B) & LoRA (Argmax) & 4 & 0.046 & 0.090 & 0.179 \\
-        SAM    (ViT-B) & LoRA + WSA    & 4 & 0.049 & 0.093 & 0.181 \\
-        \bottomrule
-    \end{tabular}
-    }
+\subsection{Main results}
+\label{sec:main_results}
+
+\input{tab/main}
+
+\Cref{tab:main} reports all configurations. Three observations hold for every backbone.
+
+\emph{Adaptation dominates.} Every adapted model is far above its frozen counterpart: with WSA, the best fine-tuned model gains $29.6$ points of PCK@0.1 for DINOv2, $31.3$ for DINOv3 and $24.8$ for SAM. Fine-tuning two blocks is the best DINOv2 setting at every threshold; for DINOv3, $N{=}2$ is best at $\alpha\geq0.1$ and $N{=}4$ at $\alpha{=}0.05$; for SAM, $N{=}4$ is best throughout.
+
+\emph{The backbone ranking is stable.} DINOv2 is ahead of DINOv3 in every cell of \cref{tab:main}, by $5.4$ points PCK@0.1 for the frozen models (argmax) and $4.4$ points for the best fine-tuned ones (WSA). SAM is far behind: even its best fine-tuned model ($47.4$) stays below frozen DINOv2 and $37.5$ points below the best DINOv2 model.
+
+\emph{WSA is a free improvement for adapted models.} It raises PCK@0.05 by $3.8$ to $5.3$ points for every adapted DINO model and by $1.0$ to $2.1$ for SAM, and PCK@0.1 by $0.4$ to $2.8$. At $\alpha{=}0.2$ the gain of adapted models shrinks to at most one point, as expected from a refinement that moves predictions by less than a patch. On frozen features the gain at $\alpha{=}0.05$ is below one point, and negative for SAM ($-0.7$): the peaks of untrained similarity maps are broad, so averaging inside the window pulls the estimate towards neighbouring, less similar cells.
+
+\subsection{Comparison with published and peer results}
+\label{sec:comparison}
+
+\begin{table}[t]
+\centering
+\caption{SPair-71k test PCK (\%, per image). Published methods use DINOv2 at $840^2$ (and SD at $960^2$); ours and the peer projects use $512$--$518^2$ inputs. $^\dagger$per-image values computed from the peer's per-pair results; $^\ddagger$WSA tuned on test pairs.}
+\label{tab:comparison}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcc}
+\toprule
+Method & @0.05 & @0.1 \\
+\midrule
+\multicolumn{3}{l}{\emph{Training-free}} \\
+DINOv2-B + NN~\cite{zhang2023tale,zhang2024telling} & 38.4 & 53.9 \\
+SD + DINOv2~\cite{zhang2023tale} & 44.7 & 59.9 \\
+GeoAware-SC zero-shot~\cite{zhang2024telling} & 49.1 & 65.4 \\
+Ours, DINOv2 frozen & 36.8 & 53.2 \\
+Ours, DINOv2 frozen + WSA & 37.7 & 55.3 \\
+\midrule
+\multicolumn{3}{l}{\emph{Supervised}} \\
+SD + DINOv2, trained head~\cite{zhang2023tale} & 57.7 & 74.6 \\
+GeoAware-SC~\cite{zhang2024telling} & 72.6 & 82.9 \\
+GeoAware-SC, AP-10K pre-training~\cite{zhang2024telling} & 75.3 & 85.6 \\
+Ours, DINOv2 FT $N{=}2$ + WSA & 71.7 & 84.9 \\
+Ours, DINOv2 LoRA $N{=}4$ + WSA & 66.4 & 79.2 \\
+\midrule
+\multicolumn{3}{l}{\emph{Peer projects, best adapted model}} \\
+P1~\cite{peer_tomm}: DINOv2 FT $N{=}2$ + WSA & 61.3 & 80.0 \\
+P2~\cite{peer_parsa}: DINOv3 FT $N{=}2$ + WSA$^\dagger$ & 55.4 & 72.4 \\
+P3~\cite{peer_hesam}: DINOv2 FT $N{=}1$ + WSA$^\ddagger$ & 53.9 & 69.1 \\
+\bottomrule
+\end{tabular}
 \end{table}
 
-\subsection{Qualitative Results}
-Visualizing predictions provides critical insights into the models' geometric and semantic awareness. Figure~\ref{fig:qualitative} shows a challenging viewpoint-variant motorbike pair (person-mounted source vs.\ standalone target) across four backbone/method combinations, illustrating how fine-tuning improves semantic localization over the frozen baseline.
+\Cref{tab:comparison} places our models among published results and three independent implementations of the same course project. Our frozen DINOv2 matches the published nearest-neighbour baseline ($53.2$ vs.\ $53.9$ PCK@0.1 per image; $56.0$ vs.\ $55.6$ per keypoint~\cite{zhang2023tale}) despite a lower input resolution ($518$ vs.\ $840$). The frozen baselines of the peer projects agree with ours to within two points for every backbone (DINOv2 $51.9$--$52.5$, DINOv3 $48.2$--$48.3$, SAM $20.5$--$21.5$ PCK@0.1, against our $53.2$, $47.8$ and $22.2$), which independently confirms the evaluation protocol.
 
-\begin{figure}[h]
-    \centering
-    \includegraphics[width=0.85\columnwidth]{img/qualitative_generated.pdf}
-    \caption{Qualitative correspondence on a SPair-71k motorbike pair across four backbone/method combinations. Source keypoints: green = correct, red = incorrect; target: X = prediction, circle = ground truth. Fine-tuning (ft\_lb2) improves DINOv2 from 0/4 to 2/4 on this viewpoint-variant pair.}
-    \label{fig:qualitative}
-\end{figure}
+Our fine-tuned DINOv2 with WSA is on par with GeoAware-SC: two points above at $\alpha{=}0.1$, one point below at $\alpha{=}0.05$, and below its AP-10K pre-trained variant. GeoAware-SC keeps SD and DINOv2 frozen at higher resolution and trains a 5\,M-parameter head with geometry-aware augmentation, while we adapt the backbone itself at lower resolution, so the two results are complementary rather than directly competing. Among the peer projects, the closest setting (P1: DINOv2, two blocks, WSA) reaches $80.0$; P2 uses three epochs at learning rate $5\times10^{-6}$ with an effective batch of 4, and P3 a single fine-tuned block.
 
-\subsection{Ablation Studies}
+\subsection{Ablations}
 \label{sec:ablations}
 
-\paragraph{WSA Window Size and DINO Layer Index.}
-We sweep the WSA window size $w \in \{3,5,7,9\}$ on frozen baselines (Figure~\ref{fig:sensitivity}a). $w{=}5$ is optimal for both DINO backbones (gain of ${\approx}0.05$\,pp over neighbouring windows); SAM shows negligible sensitivity across all windows ($<0.1$\,pp spread), confirming that $w{=}5$ is a safe default.
-We also evaluate feature extraction from layers $l \in \{4, 9, 11\}$ of the frozen DINO backbones (Figure~\ref{fig:sensitivity}b). Layer~4 (the 5th of 12 transformer blocks) delivers the highest PCK for both DINOv2 ($0.261$) and DINOv3 ($0.306$), and is used as the default in all experiments. Deeper layers degrade substantially: DINOv2 drops to $0.102$ at layer~11 ($-15.9$\,pp), and DINOv3 to $0.152$ ($-15.4$\,pp). This indicates that, for pixel-level spatial matching, intermediate features preserve the geometric patch-level structure required for keypoint localisation, while the top transformer blocks over-aggregate into class-discriminative representations that discard spatial precision.
-
-\begin{figure}[H]
+\begin{figure}[t]
     \centering
     \includegraphics[width=\columnwidth]{img/sensitivity_combined.pdf}
-    \caption{Inference-time ablations on frozen baselines. \textbf{(a)} PCK@0.10 vs.\ WSA window size: $w{=}5$ is optimal for DINO backbones; SAM is insensitive. \textbf{(b)} PCK@0.10 vs.\ ViT layer index: layer~4 (the project default) is optimal; deeper layers degrade substantially for both DINO variants.}
+    \caption{Inference choices on the validation split (frozen features). (a) PCK@0.1 with WSA as a function of the window $w$ and temperature $\tau$. (b) PCK@0.1 (argmax) of features taken from intermediate blocks; block 12 is the last.}
     \label{fig:sensitivity}
 \end{figure}
 
-\paragraph{Fine-Tuning and LoRA Depth.}
-Figure~\ref{fig:depth} sweeps the adaptation depth $N \in \{1,2,4\}$ for full fine-tuning (left) and LoRA (right). For FT, DINOv2 peaks at $N{=}2$ ($0.452$, $+1.9$\,pp over $N{=}1$), while DINOv3 peaks at $N{=}1$ ($0.465$, with $N{=}2$ slightly lower at $0.446$). For LoRA, both DINOv2 and DINOv3 peak at $N{=}2$ (PCK@0.10 of $0.402$ and $0.452$ respectively). All DINO configurations collapse at $N{=}4$, where over-adaptation disrupts the high-level semantic representations. Notably, DINOv3 LoRA ($N{=}2$) achieves $96\%$ of the best FT result ($0.471$) while training only $122{,}880$ parameters — less than $1\%$ of the equivalent FT parameter count. SAM degrades monotonically at all depths in both regimes.
+\paragraph{Feature layer.}
+\Cref{fig:sensitivity}b evaluates frozen DINO features from intermediate blocks on the validation split. Accuracy grows with depth for both backbones and is highest at the last block ($52.5$ PCK@0.1 for DINOv2, $47.4$ for DINOv3); block 4 reaches only $7.9$ and $10.3$. This agrees with~\cite{zhang2023tale}, who also use the last layer of DINOv2, and it is the only consistent choice for fine-tuning, which changes exactly the last blocks.
 
-\begin{figure}[H]
+\paragraph{WSA window and temperature.}
+On the validation split (\cref{fig:sensitivity}a) the selected settings are $(w,\tau)=(7,0.05)$ for DINOv2, $(5,0.02)$ for DINOv3 and $(9,0.05)$ for SAM. The surface is flat around the optimum: for the DINO models all windows from 3 to 9 at $\tau{=}0.02$ lie within $1.2$ points, while larger windows with a soft temperature lose accuracy for DINOv3, whose similarity maps have more secondary peaks. SAM varies by less than half a point.
+
+\begin{figure}[t]
     \centering
     \includegraphics[width=\columnwidth]{img/depth_combined.pdf}
-    \caption{PCK@0.10 vs.\ adaptation depth $N$ for full fine-tuning \textbf{(a)} and LoRA \textbf{(b)}. DINO backbones peak at $N{\leq}2$ and collapse at $N{=}4$; SAM degrades monotonically.}
+    \caption{Test PCK (with WSA) against the number of adapted blocks $N$ for fine-tuning (solid) and LoRA (dashed); dotted lines mark the frozen backbone with WSA.}
     \label{fig:depth}
 \end{figure}
 
-\paragraph{Photometric Augmentation.}
-To measure the regularization benefit of photometric data augmentation during fine-tuning, we run each fine-tuning configuration (backbone $\times$ block count) a second time with augmentation disabled. The no-augmentation variant uses identical hyperparameters and the same early-stopping criterion.
-Figure~\ref{fig:aug_ablation} compares PCK@0.10 for augmented and non-augmented fine-tuning across all backbone $\times$ block configurations. Photometric augmentation provides an average gain of $+0.4$\,pp PCK@0.10, with the largest benefit observed for SAM at $N{=}4$ ($+1.3$\,pp). Interestingly, DINOv3 at $N{=}1$ shows marginal improvement without augmentation ($+0.6$\,pp), suggesting that strongly pretrained representations can occasionally overfit to augmented views when only a single block is adapted. Overall, augmentation acts as a consistent regularizer, and its inclusion is recommended for all fine-tuning configurations.
+\paragraph{Adaptation depth and LoRA.}
+\Cref{fig:depth} shows that LoRA improves monotonically with depth for all backbones and thresholds, whereas for the DINO models full fine-tuning gains little or loses beyond $N{=}2$ (DINOv2 loses $4.0$ PCK@0.1 from $N{=}2$ to $N{=}4$). The gap between the two shrinks accordingly: at $N{=}4$, LoRA recovers $93\%$ (DINOv2), $91\%$ (DINOv3) and $92\%$ (SAM) of the PCK@0.1 gain of fine-tuning the same blocks, with $246$K instead of $28.4$\,M trainable parameters. Against the best fine-tuning setting of each backbone, LoRA with $N{=}4$ still recovers $81\%$, $88\%$ and $92\%$ of the gain.
 
-\begin{figure}[H]
+\input{tab/aug}
+
+\paragraph{Photometric augmentation.}
+Disabling augmentation (\cref{tab:aug}) changes PCK@0.1 by $-0.1$ points on average over the nine fine-tuning runs, and by at most $0.4$ points for the DINO models. Only SAM shows larger, opposite-signed differences ($+1.1$ at $N{=}2$, $-1.8$ at $N{=}4$), which we attribute to run-to-run variance: with a single seed per configuration, differences of this size are not significant. The mild colour jitter we use adds little variation beyond what the 53{,}340 training pairs already contain.
+
+\subsection{Robustness and generalisation}
+\label{sec:robustness}
+
+\begin{figure}[t]
     \centering
-    \includegraphics[width=\columnwidth]{img/aug_ablation.pdf}
-    \caption{PCK@0.10 with (blue) and without (hatched) photometric augmentation for all backbone $\times$ block configurations. Augmentation is most beneficial for deeper adaptation depths.}
-    \label{fig:aug_ablation}
+    \includegraphics[width=0.92\columnwidth]{img/per_difficulty_a0.pdf}
+    \caption{Test PCK@0.1 (WSA) of frozen and fine-tuned ($N{=}2$) DINOv2 on SPair-71k pairs with and without each difficulty flag.}
+    \label{fig:per_difficulty}
 \end{figure}
 
-\paragraph{Computational Efficiency.}
-Inference throughput is measured over 10 batches after a 3-batch warm-up. DINOv2 and DINOv3 frozen baselines reach $80$--$95$\,img/s at $1{,}400$--$1{,}850$\,MB peak GPU memory; SAM is inherently slower (${\approx}9.7$\,img/s) due to its larger image encoder. Because LoRA weights are merged into the base parameters at inference, all LoRA configurations show throughput indistinguishable from the baseline. The key differentiator is training cost: LoRA adapts $61{,}440$--$245{,}760$ parameters ($N{=}1$--$4$), versus ${\approx}7$--$28$\,M for equivalent full fine-tuning — a $>100\times$ reduction — while closing $95\%$ of the accuracy gap on DINOv3.
+\paragraph{Difficulty factors.}
+\Cref{fig:per_difficulty} splits the test pairs by the SPair-71k difficulty annotations. For the best model, truncation is the most harmful factor ($87.8$ vs.\ $81.0$ PCK@0.1), followed by occlusion ($85.8$ vs.\ $83.1$) and scale change ($86.2$ vs.\ $83.5$); pairs flagged for viewpoint change are not harder ($84.7$ vs.\ $85.1$). Fine-tuning improves every subset by 28--31 points, so it does not trade robustness for average accuracy.
+
+\input{tab/pf_willow}
+\input{tab/pf_pascal}
+
+\paragraph{Cross-dataset transfer.}
+\Cref{tab:pf_willow} evaluates the SPair-71k models on the 900 PF-Willow test pairs without retraining. Every adapted model improves on its frozen backbone, \eg DINOv2 from $66.4$ to $77.9$ PCK@0.1 with two fine-tuned blocks, so the adaptation does not overfit to SPair-71k. The margins are smaller than on SPair-71k, and the DINOv2/DINOv3 ranking is reversed for the frozen models ($66.4$ vs.\ $72.2$); after fine-tuning the two backbones are within two points. PF-Willow has only four object classes and small pose changes, so these differences are less reliable than the SPair-71k ones.
+
+On the 299 PF-Pascal test pairs (\cref{tab:pf_pascal}, threshold relative to the image size), fine-tuning again helps DINOv2 ($83.6\to89.7$ PCK@0.1 with $N{=}2$) and SAM ($44.1\to52.0$ with $N{=}1$). For DINOv3 it improves only the strict threshold ($68.5\to74.0$ PCK@0.05 with $N{=}1$), while at $\alpha{=}0.1$ no adapted model exceeds the frozen one ($88.2$). With a threshold relative to the whole image, PF-Pascal leaves little room above strong frozen features, and its 299 pairs make differences of one point uncertain.
+
+\subsection{Qualitative results}
+\label{sec:qualitative}
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=0.325\textwidth]{img/qual_218.pdf}\hfill
+    \includegraphics[width=0.325\textwidth]{img/qual_2394.pdf}\hfill
+    \includegraphics[width=0.325\textwidth]{img/qual_3540.pdf}
+    \caption{DINOv2 predictions on SPair-71k test pairs, frozen with argmax (top row of each panel) and fine-tuned with $N{=}2$ and WSA (bottom). Source keypoints are green if matched correctly at $\alpha{=}0.1$ and red otherwise; in the target, crosses are predictions and dots ground truth. The pairs were selected as those with the largest per-image gain from fine-tuning, one per category, so they illustrate the kind of error that adaptation fixes, not typical accuracy.}
+    \label{fig:qualitative}
+\end{figure*}
+
+\Cref{fig:qualitative} shows the failure modes of frozen features that fine-tuning removes. Under strong viewpoint change (aeroplane seen from behind and from the front, warship and dinghy), frozen DINOv2 matches parts to the wrong side of the object or to the background; under a large change of appearance (clear bottle in daylight, blue backlit bottle) it falls back to texture. The fine-tuned model places every keypoint on the corresponding part.
+

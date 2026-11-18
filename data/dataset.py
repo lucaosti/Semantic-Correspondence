@@ -31,6 +31,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from torchvision.transforms import functional as TF
 
+from models.common.coord_utils import rescale_keypoints_xy
 from models.common.input_norm import IMAGENET_MEAN, IMAGENET_STD
 
 
@@ -59,8 +60,9 @@ SPAIR_CATEGORIES: Tuple[str, ...] = (
     "tvmonitor",
 )
 
-# Maximum number of keypoint slots used in SPair-style padding (matches common benchmarks).
-MAX_KEYPOINTS: int = 20
+# Keypoint slots used for padding. Larger than any SPair-71k / PF pair; exceeding it raises
+# instead of silently dropping keypoints from the evaluation.
+MAX_KEYPOINTS: int = 40
 
 # Sentinel used for padded (invalid) keypoint coordinates in tensor outputs.
 INVALID_KP_COORD: float = -2.0
@@ -196,14 +198,17 @@ def pad_keypoints_to_max(
     max_points: int = MAX_KEYPOINTS,
     fill_value: float = INVALID_KP_COORD,
 ) -> Tuple[torch.Tensor, int]:
-    """Pad/truncate keypoints to a fixed maximum count for batching.
+    """Pad keypoints to a fixed maximum count for batching.
 
-    Returns a tuple ``(padded_tensor[(max_points, 2)], n_valid)``.
+    Returns a tuple ``(padded_tensor[(max_points, 2)], n_valid)``. Raises if there are more
+    than ``max_points`` keypoints.
     """
     if kps_xy.ndim != 2 or kps_xy.shape[-1] != 2:
         raise ValueError(f"Expected (N, 2) keypoints, got {tuple(kps_xy.shape)}")
     n = int(kps_xy.shape[0])
-    n_valid = min(n, int(max_points))
+    if n > int(max_points):
+        raise ValueError(f"{n} keypoints exceed max_points={max_points}; raise MAX_KEYPOINTS.")
+    n_valid = n
     out = torch.full((max_points, 2), float(fill_value), dtype=torch.float32)
     if n_valid > 0:
         out[:n_valid] = kps_xy[:n_valid].to(dtype=torch.float32)
@@ -215,17 +220,13 @@ def scale_keypoints_xy(
     orig_size_xy: Tuple[int, int],
     new_size_xy: Tuple[int, int],
 ) -> torch.Tensor:
-    """Scale keypoints after a pure resize from ``orig_size`` to ``new_size`` (PIL ``(W, H)``)."""
+    """Map keypoints through a pure resize from ``orig_size`` to ``new_size`` (PIL ``(W, H)``).
+
+    Uses the pixel-centre convention of the resize itself (see ``coord_utils``).
+    """
     ow, oh = orig_size_xy
     nw, nh = new_size_xy
-    if ow <= 0 or oh <= 0:
-        raise ValueError("Original width/height must be positive.")
-    sx = float(nw) / float(ow)
-    sy = float(nh) / float(oh)
-    out = kps_xy.clone()
-    out[:, 0] *= sx
-    out[:, 1] *= sy
-    return out
+    return rescale_keypoints_xy(kps_xy, (oh, ow), (nh, nw))
 
 
 def pil_resize_bicubic(img: Image.Image, size_xy: Tuple[int, int]) -> Image.Image:
@@ -527,11 +528,15 @@ class SPair71kPairDataset(Dataset):
 
         src_k_pad, n_src = pad_keypoints_to_max(src_k2, MAX_KEYPOINTS, INVALID_KP_COORD)
         tgt_k_pad, n_tgt = pad_keypoints_to_max(tgt_k2, MAX_KEYPOINTS, INVALID_KP_COORD)
-        n_valid = int(min(n_src, n_tgt))
+        tgt_k_orig_pad, _ = pad_keypoints_to_max(rec.tgt_kps_xy, MAX_KEYPOINTS, INVALID_KP_COORD)
+        if n_src != n_tgt:
+            raise ValueError(f"{rec.pair_id}: {n_src} source vs {n_tgt} target keypoints")
+        n_valid = int(n_src)
 
-        # Bbox-based PCK tolerance (max side length) in **preprocessed target** pixel frame.
-        tw = tgt_bbox[2] - tgt_bbox[0]
-        th = tgt_bbox[3] - tgt_bbox[1]
+        # PCK tolerance: max side of the target bbox in the **original** target image frame
+        # (standard SPair-71k protocol; PCK is computed in that frame, see experiment_runner).
+        tw = rec.tgt_bbox_xyxy[2] - rec.tgt_bbox_xyxy[0]
+        th = rec.tgt_bbox_xyxy[3] - rec.tgt_bbox_xyxy[1]
         pck_threshold_bbox = torch.max(tw, th).clamp_min(1e-6)
 
         # Pad keypoint identifiers to MAX_KEYPOINTS as well; -1 marks padded slots.
@@ -554,6 +559,7 @@ class SPair71kPairDataset(Dataset):
             "tgt_img": tgt_t,
             "src_kps": src_k_pad,
             "tgt_kps": tgt_k_pad,
+            "tgt_kps_orig": tgt_k_orig_pad,
             "kp_ids": kp_ids_pad,
             "n_valid_keypoints": torch.tensor([n_valid], dtype=torch.int64),
             "src_bbox": src_bbox,

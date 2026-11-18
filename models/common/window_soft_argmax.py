@@ -9,7 +9,9 @@ The procedure follows GeoAware-SC / "Telling Left from Right" style refinement:
 1. Find the discrete peak with ``argmax`` on the similarity map.
 2. Crop a square patch of side ``window_size`` around the peak (with boundary handling).
 3. Apply softmax with temperature over the window, then take the expected ``(x, y)``
-   position (soft-argmax) in **feature-grid** coordinates.
+   position (soft-argmax) in **feature-grid** coordinates. Cells outside the map get
+   zero weight. Similarities are cosines in ``[-1, 1]``, so the temperature must be well
+   below 1 for the softmax to be peaked; window and temperature are selected on ``val``.
 4. Convert the refined position to **input image pixel** coordinates (same convention as
    :mod:`models.common.matching`).
 
@@ -17,7 +19,7 @@ Implementation note
 -------------------
 The batched helper :func:`refine_predictions_window_soft_argmax` is fully vectorized
 across the ``N`` keypoints (no Python loop, no host/device synchronization). At eval
-time SPair-71k yields up to 20 keypoints per pair times tens of thousands of pairs,
+time SPair-71k yields up to ``MAX_KEYPOINTS`` keypoints per pair times tens of thousands of pairs,
 so removing the inner ``.item()`` saves a six-figure number of CUDA syncs per run.
 """
 
@@ -27,6 +29,8 @@ from typing import Tuple
 
 import torch
 import torch.nn.functional as F
+
+from models.common.coord_utils import rescale_coords
 
 
 def _vectorized_window_soft_argmax(
@@ -49,12 +53,15 @@ def _vectorized_window_soft_argmax(
     if sim_maps.dim() != 3:
         raise ValueError(f"Expected (N,Hf,Wf), got {tuple(sim_maps.shape)}")
 
+    sim_maps = sim_maps.float()
     n, hf, wf = sim_maps.shape
     ws = int(window_size)
     if ws < 1:
         raise ValueError(f"window_size must be >= 1, got {window_size}")
     if ws % 2 == 0:
         ws += 1
+    if float(temperature) <= 0.0:
+        raise ValueError(f"temperature must be > 0, got {temperature}")
     r = ws // 2
 
     flat = sim_maps.reshape(n, -1)
@@ -74,7 +81,7 @@ def _vectorized_window_soft_argmax(
     n_idx = torch.arange(n, device=sim_maps.device, dtype=torch.long).view(n, 1, 1)
     patches = padded[n_idx, rows, cols]  # (N, ws, ws)
 
-    logits = patches.reshape(n, -1) / max(float(temperature), 1e-6)
+    logits = patches.reshape(n, -1) / float(temperature)
     weights = torch.softmax(logits, dim=1).reshape(n, ws, ws)
 
     # Coordinates of each window cell in **original feature-grid** space.
@@ -92,12 +99,13 @@ def _feat_xy_to_pixel_xy(
     feat_hw: Tuple[int, int],
 ) -> torch.Tensor:
     """Map ``(N, 2)`` feature-grid coords back to input-image pixel coords."""
-    h_img, w_img = int(img_hw[0]), int(img_hw[1])
-    hf, wf = int(feat_hw[0]), int(feat_hw[1])
-    out = feat_xy.clone()
-    out[..., 0] = (out[..., 0] + 0.5) * (float(w_img) / float(wf)) - 0.5
-    out[..., 1] = (out[..., 1] + 0.5) * (float(h_img) / float(hf)) - 0.5
-    return out
+    return torch.stack(
+        [
+            rescale_coords(feat_xy[..., 0], int(feat_hw[1]), int(img_hw[1])),
+            rescale_coords(feat_xy[..., 1], int(feat_hw[0]), int(img_hw[0])),
+        ],
+        dim=-1,
+    )
 
 
 def window_soft_argmax_xy(
@@ -105,7 +113,7 @@ def window_soft_argmax_xy(
     img_hw: Tuple[int, int],
     *,
     window_size: int = 5,
-    temperature: float = 1.0,
+    temperature: float = 0.05,
 ) -> torch.Tensor:
     """Refine **one** similarity map of shape ``(Hf, Wf)`` to a sub-pixel ``(x, y)``.
 
@@ -135,7 +143,7 @@ def refine_predictions_window_soft_argmax(
     img_hw: Tuple[int, int],
     *,
     window_size: int = 5,
-    temperature: float = 1.0,
+    temperature: float = 0.05,
 ) -> torch.Tensor:
     """Apply window soft-argmax to a batch of per-keypoint similarity maps.
 

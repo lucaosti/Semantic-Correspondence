@@ -12,8 +12,9 @@ from data.dataset import PreprocessMode, preprocess_pair_images_and_keypoints, s
 def test_scale_keypoints_xy_resize():
     kps = torch.tensor([[10.0, 20.0]], dtype=torch.float32)
     out = scale_keypoints_xy(kps, orig_size_xy=(100, 200), new_size_xy=(50, 100))
-    assert out[0, 0].item() == 5.0
-    assert out[0, 1].item() == 10.0
+    # Pixel-centre convention: (x + 0.5) * s - 0.5
+    assert out[0, 0].item() == pytest.approx(4.75)
+    assert out[0, 1].item() == pytest.approx(9.75)
 
 
 def test_preprocess_fixed_resize_keypoints_scaled():
@@ -32,6 +33,6 @@ def test_preprocess_fixed_resize_keypoints_scaled():
     )
     assert s2.size == (784, 784)
     assert sk2.shape == sk.shape
-    assert sk2[0, 0].item() == pytest.approx(50.0 * 784.0 / 100.0)
-    assert sk2[0, 1].item() == pytest.approx(40.0 * 784.0 / 80.0)
+    assert sk2[0, 0].item() == pytest.approx(50.5 * 784.0 / 100.0 - 0.5)
+    assert sk2[0, 1].item() == pytest.approx(40.5 * 784.0 / 80.0 - 0.5)
     assert meta["mode"] == str(PreprocessMode.FIXED_RESIZE)

@@ -140,10 +140,9 @@ PF_WILLOW_ROOT: Optional[str] = None   # explicit path override
 PF_PASCAL_ROOT: Optional[str] = None
 ```
 
-The pipeline skips a PF stage gracefully (with a warning) if the dataset directory
-or its annotation CSV is not present.  The standalone evaluation script
-(`scripts/eval_pf_standalone.py`) exports all results to a single file:
-`runs/pipeline_exports/pck_results_pf.json`.
+The pipeline skips a PF stage with a warning if the annotation CSV read by the loader
+(`test_pairs_pf.csv` / `test_pairs_pf_pascal.csv`) is not present, and exports
+`runs/pipeline_exports/pck_results_pf_willow.json` / `pck_results_pf_pascal.json`.
 
 ---
 
@@ -219,7 +218,7 @@ The CUDA optimizer step uses `AdamW(..., fused=True)` (both fine-tune and LoRA p
 
 Throughput tweaks in `scripts/_training_common.run_gaussian_training_loop`: the train DataLoader is built with `drop_last=True` (no trailing partial micro-batch — keeps `torch.compile` shapes stable and gradient-accumulation groups complete) and host-to-device transfers use `non_blocking=True` so they overlap with the previous step's compute (pinned memory is already on by default via `utils.hardware.pin_memory_for`).
 
-**Gradient accumulation.** `scripts/train.py --accumulation-steps N` (or `finetune.accumulation_steps` / `lora.accumulation_steps` in `config.yaml`) divides the per-batch loss by `N` and steps the optimizer every `N` micro-batches, yielding an **effective batch of `batch_size × N`** without extra VRAM. Default `1` (off). Useful on memory-tight devices (e.g. SAM with `B=4` on consumer GPUs) to recover the PDF effective batch.
+**Gradient accumulation.** `scripts/train.py --accumulation-steps N` (or `finetune.accumulation_steps` / `lora.accumulation_steps` in `config.yaml`) divides the per-batch loss by `N` and steps the optimizer every `N` micro-batches, yielding an **effective batch of `batch_size × N`** without extra VRAM. Default `1` (off). The reported experiment uses it for SAM ViT-B (`B=10`, `N=2`, effective batch 20, same as the DINO backbones).
 
 #### Effect of changing batch size or precision
 
@@ -330,7 +329,7 @@ Default **α** triple in the pipeline: **`(0.05, 0.1, 0.2)`** (`EVAL_ALPHAS` in 
 
 **YAML `--config`:** `_apply_pipeline_yaml` maps sections into module globals. Fine-tuning and LoRA have **separate** scalar batch size fields (`finetune.batch_size` → `FT_BATCH_SIZE`, `lora.batch_size` → `LORA_BATCH_SIZE`) plus optional per-backbone maps (`finetune.batch_size_by_backbone`, `lora.batch_size_by_backbone`). Precision is configured through `runtime.precision` → `PRECISION`. The `finetune.last_blocks` field accepts either a single integer or a list.
 
-**Compile:** `COMPILE=True` is the in-script default in `run_pipeline.py`; `scripts/_training_common.maybe_compile_model` activates `torch.compile(mode="reduce-overhead")` only on CUDA Ampere+ and silently no-ops everywhere else (MPS, CPU, older CUDA). The wrapper forwards to the original module so state-dict / save / resume keys stay clean.
+**Compile:** `COMPILE=True` is the in-script default in `run_pipeline.py`; `scripts/_training_common.maybe_compile_model` activates `torch.compile` (default mode) only on CUDA Ampere+ and silently no-ops everywhere else (MPS, CPU, older CUDA). The wrapper forwards to the original module so state-dict / save / resume keys stay clean.
 
 **Notebook overrides:** both `AML_Colab.ipynb` and `AML_Local.ipynb` write `config.yaml` with PDF batch defaults (DINO=20, SAM=4 on CUDA), `precision` selected from compute capability (Ampere+ → bf16, Volta/Turing → fp16, MPS/CPU → fp32), and `resume_save_interval` adapted to the speed tier (`slow=50`, `medium=200`, `fast=500`). Hyperparameters (`epochs=50`, `patience=7`, LR/weight-decay/LoRA rank/alpha) are project-fixed and not modified by the notebooks.
 
@@ -403,7 +402,7 @@ Choices mandated by the course PDF (loss type, PCK thresholds, backbone families
 
 **L2 normalization of features (§5.1).** The extractor L2-normalizes each spatial descriptor along the channel axis. This makes cosine similarity equal to the dot product and removes per-location magnitude variance, so the matching score reflects only the directional alignment of the descriptor in feature space.
 
-**DINO intermediate layer index = 4 (§5.1).** The final ViT-B layers (9–12) aggregate class-level semantics at the cost of spatial precision. Layer 4 retains both local texture and mid-level semantic abstraction, which is the empirically optimal operating point for dense correspondence on SPair-71k — validated by the layer-sweep ablation (`pck_results_layer_sweep.json`).
+**DINO feature layer = last block (§5.1).** Features come from the last transformer block (`DINO_LAYER = -1`, after the final norm). The layer-sweep ablation on the validation split (`pck_results_layer_sweep.json`) shows PCK@0.1 rising monotonically with depth for both DINOv2 and DINOv3 (block 4: 7.9 / 10.3, last block: 52.5 / 47.4), and fine-tuning adapts exactly the last blocks, so training requires `--dino-layer -1`.
 
 **Gaussian sigma = 1.0 feature pixel (§6.1).** At DINOv2 ViT-B resolution (37×37 for 518×518 input), `sigma_feat=1.0` equals one feature cell ≈ 14 image pixels, or about 2.7% of image width. Smaller sigmas produce near-delta targets that are numerically difficult to minimize under softmax; larger sigmas spread supervision across semantically distinct grid cells, diluting the correspondence signal.
 
@@ -411,7 +410,7 @@ Choices mandated by the course PDF (loss type, PCK thresholds, backbone families
 
 **AdamW and weight decay (§6.3).** AdamW decouples L2 regularization from the adaptive gradient step, which is the standard optimizer for ViT adaptation. Fine-tuning uses `weight_decay=0.01`; LoRA uses `weight_decay=0.0` because the adapter matrices (`A`, `B`) are already constrained to low rank — additional L2 doubly penalizes their magnitude and impedes convergence to expressive low-rank solutions.
 
-**`drop_last=True`, `non_blocking=True` in the train DataLoader (§6.3).** `drop_last` ensures all micro-batches share the same shape, which is required by `torch.compile(mode="reduce-overhead")` (no re-tracing on partial batches) and by gradient-accumulation groups to be complete. `non_blocking=True` overlaps host-to-device transfers with the preceding step's GPU compute, hiding H2D latency behind the backward pass.
+**`drop_last=True`, `non_blocking=True` in the train DataLoader (§6.3).** `drop_last` ensures all micro-batches share the same shape, which avoids re-tracing under `torch.compile` (default mode; `reduce-overhead` CUDA graphs are not used because they break the two forwards per step and gradient accumulation) and keeps gradient-accumulation groups complete. `non_blocking=True` overlaps host-to-device transfers with the preceding step's GPU compute, hiding H2D latency behind the backward pass.
 
 **Freezing early blocks, fine-tuning last N (§6.4).** Early ViT blocks encode generic low-level features (edges, textures) that transfer across tasks; fine-tuning them on the small SPair-71k training set risks overwriting stable pretrained representations. Late blocks encode more task-specific high-level semantics and adapt efficiently with limited data.
 

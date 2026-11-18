@@ -1,0 +1,37 @@
+\begin{table*}[t]
+\centering
+\caption{PCK (\%) on the SPair-71k test split, averaged per keypoint (micro). Same runs as \cref{tab:main}.}
+\label{tab:main_pt}
+\small
+\begin{tabular}{llcr ccc ccc}
+\toprule
+ & & & Trainable & \multicolumn{3}{c}{Argmax} & \multicolumn{3}{c}{WSA} \\
+\cmidrule(lr){5-7}\cmidrule(lr){8-10}
+Backbone & Method & $N$ & params & @0.05 & @0.1 & @0.2 & @0.05 & @0.1 & @0.2 \\
+\midrule
+\multirow{7}{*}{DINOv2} & Frozen & -- & 0 & 39.5 & 56.0 & 71.4 & 40.6 & 58.4 & 72.6 \\
+ & FT & 1 & 7.1M & 66.3 & 82.9 & 91.8 & 70.9 & 85.0 & 92.6 \\
+ & FT & 2 & 14.2M & \textbf{70.6} & \textbf{85.9} & \textbf{93.0} & \textbf{74.8} & \textbf{87.5} & \textbf{93.5} \\
+ & FT & 4 & 28.4M & 70.3 & 83.3 & 89.7 & 74.2 & 84.4 & 90.1 \\
+ & LoRA & 1 & 61K & 57.0 & 74.8 & 86.1 & 61.5 & 77.5 & 87.1 \\
+ & LoRA & 2 & 123K & 59.4 & 77.4 & 88.3 & 64.0 & 80.2 & 89.1 \\
+ & LoRA & 4 & 246K & 65.6 & 81.2 & 89.0 & 70.5 & 83.1 & 89.4 \\
+\midrule
+\multirow{7}{*}{DINOv3} & Frozen & -- & 0 & 37.2 & 53.6 & 67.7 & 37.8 & 55.1 & 68.4 \\
+ & FT & 1 & 7.1M & 60.4 & 80.0 & 90.2 & 65.9 & 81.9 & 90.6 \\
+ & FT & 2 & 14.2M & 64.2 & \textbf{82.0} & \textbf{90.7} & 69.3 & \textbf{83.5} & \textbf{90.9} \\
+ & FT & 4 & 28.4M & \textbf{66.1} & 81.3 & 89.1 & \textbf{70.7} & 82.4 & 89.2 \\
+ & LoRA & 1 & 61K & 51.3 & 71.4 & 84.1 & 55.5 & 73.5 & 84.7 \\
+ & LoRA & 2 & 123K & 57.3 & 77.0 & 88.0 & 62.8 & 78.9 & 88.3 \\
+ & LoRA & 4 & 246K & 61.8 & 79.1 & 87.9 & 66.8 & 80.5 & 88.1 \\
+\midrule
+\multirow{7}{*}{SAM} & Frozen & -- & 0 & 16.9 & 26.0 & 40.2 & 16.2 & 26.6 & 40.7 \\
+ & FT & 1 & 7.1M & 36.1 & 48.8 & 62.4 & 37.8 & 50.4 & 62.9 \\
+ & FT & 2 & 14.2M & 35.4 & 49.0 & 62.1 & 37.7 & 50.3 & 62.4 \\
+ & FT & 4 & 28.4M & \textbf{39.6} & \textbf{53.0} & \textbf{64.7} & \textbf{41.9} & \textbf{53.4} & \textbf{64.7} \\
+ & LoRA & 1 & 61K & 32.5 & 44.2 & 58.7 & 33.6 & 46.0 & 59.3 \\
+ & LoRA & 2 & 123K & 34.9 & 47.6 & 60.7 & 36.7 & 49.0 & 61.1 \\
+ & LoRA & 4 & 246K & 36.9 & 49.7 & 62.1 & 39.1 & 51.0 & 62.4 \\
+\bottomrule
+\end{tabular}
+\end{table*}

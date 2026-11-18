@@ -1,0 +1,35 @@
+\begin{table}[t]
+\centering
+\caption{PF-Pascal: PCK (\%, per image, argmax) of SPair-71k models without retraining; threshold relative to the image size.}
+\label{tab:pf_pascal}
+\small
+\begin{tabular}{llcccc}
+\toprule
+Backbone & Method & $N$ & @0.05 & @0.1 & @0.2 \\
+\midrule
+DINOv2 & Frozen & -- & 64.8 & 83.6 & 93.2 \\
+DINOv2 & FT & 1 & 73.5 & 89.3 & 94.7 \\
+DINOv2 & FT & 2 & 75.4 & 89.7 & 96.1 \\
+DINOv2 & FT & 4 & 72.6 & 87.3 & 94.2 \\
+DINOv2 & LoRA & 1 & 69.4 & 85.5 & 93.5 \\
+DINOv2 & LoRA & 2 & 68.4 & 85.9 & 94.1 \\
+DINOv2 & LoRA & 4 & 70.2 & 86.6 & 94.0 \\
+\midrule
+DINOv3 & Frozen & -- & 68.5 & 88.2 & 95.7 \\
+DINOv3 & FT & 1 & 74.0 & 88.2 & 94.6 \\
+DINOv3 & FT & 2 & 73.6 & 87.8 & 94.8 \\
+DINOv3 & FT & 4 & 71.8 & 86.5 & 93.9 \\
+DINOv3 & LoRA & 1 & 66.2 & 84.9 & 92.8 \\
+DINOv3 & LoRA & 2 & 71.6 & 86.4 & 94.2 \\
+DINOv3 & LoRA & 4 & 69.6 & 83.8 & 92.7 \\
+\midrule
+SAM & Frozen & -- & 30.2 & 44.1 & 61.9 \\
+SAM & FT & 1 & 37.8 & 52.0 & 65.7 \\
+SAM & FT & 2 & 34.7 & 47.2 & 63.4 \\
+SAM & FT & 4 & 36.0 & 49.3 & 62.9 \\
+SAM & LoRA & 1 & 35.9 & 49.4 & 65.0 \\
+SAM & LoRA & 2 & 33.5 & 46.3 & 63.1 \\
+SAM & LoRA & 4 & 33.1 & 46.7 & 62.6 \\
+\bottomrule
+\end{tabular}
+\end{table}

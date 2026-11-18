@@ -1,0 +1,21 @@
+\begin{table}[t]
+\centering
+\caption{Photometric augmentation during fine-tuning: PCK@0.1 (\%, per image, WSA) on the SPair-71k test split.}
+\label{tab:aug}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Backbone & $N$ & with aug. & without & $\Delta$ \\
+\midrule
+DINOv2 & 1 & 82.4 & 82.3 & +0.1 \\
+DINOv2 & 2 & 84.9 & 84.7 & +0.3 \\
+DINOv2 & 4 & 80.9 & 81.3 & -0.4 \\
+DINOv3 & 1 & 79.1 & 79.2 & -0.0 \\
+DINOv3 & 2 & 80.5 & 80.5 & -0.0 \\
+DINOv3 & 4 & 79.4 & 79.6 & -0.2 \\
+SAM & 1 & 45.4 & 45.3 & +0.2 \\
+SAM & 2 & 44.7 & 43.6 & +1.1 \\
+SAM & 4 & 47.4 & 49.2 & -1.8 \\
+\bottomrule
+\end{tabular}
+\end{table}

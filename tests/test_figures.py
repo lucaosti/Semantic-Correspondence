@@ -33,16 +33,17 @@ def test_parse_run_name_canonical(name, backbone, method, last_blocks, wsa):
     assert info.wsa is wsa
 
 
-@pytest.mark.parametrize("name,window", [
-    ("dinov2_vitb14_baseline_wsa_w3", 3),
-    ("dinov3_vitb16_baseline_wsa_w7", 7),
+@pytest.mark.parametrize("name,window,temp", [
+    ("dinov2_vitb14_baseline_wsa_w3_t0.02", 3, 0.02),
+    ("dinov3_vitb16_baseline_wsa_w7_t0.1", 7, 0.1),
 ])
-def test_parse_run_name_wsa_sweep(name, window):
+def test_parse_run_name_wsa_sweep(name, window, temp):
     info = F.parse_run_name(name)
     assert info is not None
     assert info.method == "baseline"
     assert info.wsa is True
     assert info.wsa_window == window
+    assert info.wsa_temperature == pytest.approx(temp)
 
 
 @pytest.mark.parametrize("name,layer", [

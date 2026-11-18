@@ -10,7 +10,8 @@ from models.common.dense_extractor import BackboneName, DenseExtractorConfig, De
 from models.common.input_norm import denormalize_imagenet, imagenet_to_sam_input, normalize_imagenet
 from models.common.matching import (
     argmax_to_pixel_xy,
-    match_cosine_similarity_map,
+    sample_descriptors,
+    similarity_maps,
     predict_correspondences_cosine_argmax,
     sample_features_bilinear,
 )
@@ -36,7 +37,8 @@ __all__ = [
     "fuse_layer_features",
     "imagenet_to_sam_input",
     "lora_trainable_parameters",
-    "match_cosine_similarity_map",
+    "sample_descriptors",
+    "similarity_maps",
     "normalize_imagenet",
     "predict_correspondences_cosine_argmax",
     "refine_predictions_window_soft_argmax",

@@ -210,15 +210,15 @@ def predict_pair(
     use_wsa: bool,
     img_hw: Tuple[int, int],
     wsa_window: int = 5,
-    wsa_temperature: float = 1.0,
+    wsa_temperature: float = 0.05,
 ) -> Dict[str, Any]:
     """Run cosine-argmax (and optional WSA refinement) on a single SPair pair sample.
 
     ``sample`` is one item from :class:`SPair71kPairDataset`: keys ``src_img``, ``tgt_img``,
-    ``src_kps`` (``[K, 2]`` xy, possibly padded), ``tgt_kps``, ``n_valid_keypoints``,
-    ``pck_threshold_bbox``.
+    ``src_kps`` (``[K, 2]`` xy, possibly padded), ``n_valid_keypoints``, ``tgt_imsize``.
 
-    Returns a dict ``{pred_tgt_xy, sim_maps, valid_mask}``.
+    Returns ``{pred_tgt_xy, pred_tgt_xy_orig, sim_maps, valid_mask}``: predictions in the
+    preprocessed frame (for drawing) and in the original target frame (for PCK).
     """
     import torch
 
@@ -233,28 +233,25 @@ def predict_pair(
     valid_mask = torch.zeros(src_kps.shape[0], dtype=torch.bool, device=device)
     valid_mask[:n_valid] = True
 
+    from models.common.coord_utils import rescale_keypoints_xy
+
     with torch.no_grad():
-        feat_src, meta_src = extractor(src)
-        feat_tgt, meta_tgt = extractor(tgt)
-        coord_src = meta_src.get("coord_hw", img_hw)
-        coord_tgt = meta_tgt.get("coord_hw", img_hw)
+        feat_src, _ = extractor(src)
+        feat_tgt, _ = extractor(tgt)
         out = predict_correspondences_cosine_argmax(
-            feat_src, feat_tgt, src_kps,
-            img_hw=coord_src, img_hw_src=coord_src, img_hw_tgt=coord_tgt,
-            valid_mask=valid_mask,
+            feat_src, feat_tgt, src_kps, img_hw, valid_mask=valid_mask,
         )
         pred_tgt = out["pred_tgt_xy"]
         sim_maps = out["sim_maps"]
         if use_wsa:
             pred_tgt = refine_predictions_window_soft_argmax(
-                sim_maps, coord_tgt, window_size=wsa_window, temperature=wsa_temperature,
+                sim_maps, img_hw, window_size=wsa_window, temperature=wsa_temperature,
             )
-        # Rescale prediction back to dataset image frame
-        if coord_tgt != img_hw:
-            from models.common.coord_utils import rescale_keypoints_xy
-            pred_tgt = rescale_keypoints_xy(pred_tgt, coord_tgt, img_hw)
+        w0, h0 = (float(v) for v in sample["tgt_imsize"].view(-1)[:2])
+        pred_orig = rescale_keypoints_xy(pred_tgt, img_hw, (h0, w0))
     return {
         "pred_tgt_xy": pred_tgt.detach().cpu(),
+        "pred_tgt_xy_orig": pred_orig.detach().cpu(),
         "sim_maps": sim_maps.detach().cpu(),
         "valid_mask": valid_mask.detach().cpu(),
     }
@@ -272,7 +269,7 @@ def render_method_comparison_grid(
     img_hw: Tuple[int, int],
     use_wsa_per_label: Optional[Dict[str, bool]] = None,
     wsa_window: int = 5,
-    wsa_temperature: float = 1.0,
+    wsa_temperature: float = 0.05,
     alpha: float = 0.1,
     figsize_per_axis: Tuple[float, float] = (3.5, 3.5),
 ):
@@ -298,6 +295,7 @@ def render_method_comparison_grid(
     tgt_np = _to_numpy_hwc(sample["tgt_img"])
     src_kps = sample["src_kps"].cpu().numpy()
     gt_kps = sample["tgt_kps"].cpu().numpy()
+    gt_orig = sample["tgt_kps_orig"].cpu().numpy()
 
     # Keypoint names — handle single-sample (list of str) and batched (list of lists).
     _raw_names = sample.get("src_kp_names") or []
@@ -312,8 +310,10 @@ def render_method_comparison_grid(
             wsa_window=wsa_window, wsa_temperature=wsa_temperature,
         )
         pred = result["pred_tgt_xy"].numpy()
+        pred_orig = result["pred_tgt_xy_orig"].numpy()
         valid = result["valid_mask"].numpy()
-        dist = np.linalg.norm(pred - gt_kps, axis=-1)
+        # PCK in the original target frame, as in evaluation.experiment_runner.
+        dist = np.linalg.norm(pred_orig - gt_orig, axis=-1)
         correct = (dist <= alpha * pck_thr) & valid
 
         ambiguous_set: set = set()
@@ -321,8 +321,8 @@ def render_method_comparison_grid(
             _named = [(kp_names[i] if i < len(kp_names) else "", float(src_kps[i, 0]), float(src_kps[i, 1])) for i in range(len(src_kps))]
             ambiguous_set = set(find_symmetry_ambiguity(
                 src_kps_named=_named,
-                pred_kps_xy=[(float(pred[i, 0]), float(pred[i, 1])) for i in range(len(pred))],
-                gt_kps_xy=[(float(gt_kps[i, 0]), float(gt_kps[i, 1])) for i in range(len(gt_kps))],
+                pred_kps_xy=[(float(pred_orig[i, 0]), float(pred_orig[i, 1])) for i in range(len(pred_orig))],
+                gt_kps_xy=[(float(gt_orig[i, 0]), float(gt_orig[i, 1])) for i in range(len(gt_orig))],
                 pck_threshold=pck_thr,
                 alpha=alpha,
             ))
@@ -375,7 +375,7 @@ def render_similarity_heatmap_overlay(
     keypoint_indices: Sequence[int],
     use_wsa: bool = False,
     wsa_window: int = 5,
-    wsa_temperature: float = 1.0,
+    wsa_temperature: float = 0.05,
     figsize_per_axis: Tuple[float, float] = (4.0, 4.0),
 ):
     """Overlay similarity heatmaps on the target image for selected source keypoints.

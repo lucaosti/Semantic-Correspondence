@@ -10,7 +10,7 @@ def test_finetune_config_defaults():
     assert c.backbone == "dinov2_vitb14"
     assert c.batch_size == 20
     assert c.last_blocks == 2
-    assert c.dino_layer_indices == 4
+    assert c.dino_layer == -1
     assert c.precision == "auto"
 
 
@@ -19,7 +19,7 @@ def test_lora_config_defaults():
     assert c.rank == 8
     assert c.alpha == 16.0
     assert c.target == "mlp"
-    assert c.dino_layer_indices == 4
+    assert c.dino_layer == -1
     assert c.precision == "auto"
 
 
@@ -52,7 +52,7 @@ def test_config_matches_train_argparse_defaults():
     assert args.epochs == ft.max_epochs
     assert args.last_blocks == ft.last_blocks
     assert args.weight_decay == ft.weight_decay
-    assert args.layer_indices == ft.dino_layer_indices
+    assert args.dino_layer == ft.dino_layer
     assert args.patience == es.patience
     assert abs(args.min_delta - es.min_delta) < 1e-9
     assert args.rank == lora.rank
